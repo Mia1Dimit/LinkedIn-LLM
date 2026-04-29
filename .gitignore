@@ -1,0 +1,136 @@
+# ==========================================
+# PERSONAL DATA - CRITICAL EXCLUSIONS
+# ==========================================
+
+# LinkedIn export data and personal information
+data/
+!data/.gitkeep
+
+# Credentials and API keys
+creds/
+*.json
+!docs/*.json
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# ==========================================
+# PYTHON & DEVELOPMENT
+# ==========================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+env.bak/
+venv.bak/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# IDE & EDITOR
+# ==========================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Sublime
+*.sublime-project
+*.sublime-workspace
+
+# General editors
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ==========================================
+# OS SPECIFIC
+# ==========================================
+
+# Windows
+Thumbs.db
+*.lnk
+.DS_Store
+
+# macOS
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+.Xauthority
+.bash_history
+
+# ==========================================
+# DATABASE & LOGS
+# ==========================================
+
+# Vector store and database files
+vector_store.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# ==========================================
+# TEMPORARY & CACHE FILES
+# ==========================================
+
+*.tmp
+*.temp
+.cache/
+temp/
+tmp/
+
+# ==========================================
+# TAVILY SCRIPTS - PERSONAL DATA & RESULTS
+# ==========================================
+
+# Generated connection and company profiles
+tavily_scripts/Connections/
+tavily_scripts/Companies/
+
+# CSV exports and generated data
+tavily_scripts/*.csv
+tavily_scripts/*.md
