@@ -7,7 +7,7 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - **Vector DB**: ChromaDB (local, no server needed)
 - **Embeddings**: AWS Bedrock — Amazon Titan Embed v2 or Cohere Embed Multilingual
 - **LLM**: AWS Bedrock — Claude 3 Sonnet
-- **Data**: LinkedIn ZIP export + Tavily enrichment MDs
+- **Data**: Member Data Portability API + LinkedIn ZIP export + Tavily enrichment MDs
 
 ---
 
