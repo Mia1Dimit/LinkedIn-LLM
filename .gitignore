@@ -134,3 +134,8 @@ tavily_scripts/Companies/
 # CSV exports and generated data
 tavily_scripts/*.csv
 tavily_scripts/*.md
+
+# ==========================================
+# ChromaDB - Vector Store Data
+# ==========================================
+chroma_db/
