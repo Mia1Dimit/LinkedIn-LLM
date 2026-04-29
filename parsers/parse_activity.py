@@ -205,6 +205,8 @@ def parse_all_activity() -> list[DocumentChunk]:
     chunks.extend(parse_saved_jobs())
     chunks.extend(parse_saved_job_alerts())
     chunks.extend(parse_saved_answers())
-    chunks.extend(parse_likes())
+    # TODO: parse_likes() requires ALL_LIKES from LinkedIn Portability API (Phase 2)
+    # CSV exports don't include this data — uncomment when API integration is ready
+    # chunks.extend(parse_likes())
     print(f"[parse_activity] Total activity chunks: {len(chunks)}")
     return chunks
