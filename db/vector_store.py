@@ -271,24 +271,37 @@ class VectorStore:
     # ── Internal helpers ──────────────────────
 
     def _existing_ids(self, collection: chromadb.Collection, ids: list[str]) -> set[str]:
-        """Return the subset of ids that already exist in the collection."""
+        """
+        Return the subset of ids that already exist in the collection.
+        Batched in groups of 500 — ChromaDB's collection.get() silently
+        truncates large ID lists, so we must page through them manually.
+        """
         if not ids:
             return set()
-        try:
-            result = collection.get(ids=ids, include=[])
-            return set(result["ids"])
-        except Exception:
-            return set()
+        found: set[str] = set()
+        for i in range(0, len(ids), 500):
+            batch = ids[i:i + 500]
+            try:
+                result = collection.get(ids=batch, include=[])
+                found.update(result["ids"])
+            except Exception:
+                pass
+        return found
 
     def _existing_hashes(self, collection: chromadb.Collection, ids: list[str]) -> dict[str, str]:
-        """Return {chunk_id: content_hash} for existing chunks."""
+        """
+        Return {chunk_id: content_hash} for existing chunks.
+        Batched for the same reason as _existing_ids.
+        """
         if not ids:
             return {}
-        try:
-            result = collection.get(ids=ids, include=["metadatas"])
-            return {
-                id_: meta.get("content_hash", "")
-                for id_, meta in zip(result["ids"], result["metadatas"])
-            }
-        except Exception:
-            return {}
+        hashes: dict[str, str] = {}
+        for i in range(0, len(ids), 500):
+            batch = ids[i:i + 500]
+            try:
+                result = collection.get(ids=batch, include=["metadatas"])
+                for id_, meta in zip(result["ids"], result["metadatas"]):
+                    hashes[id_] = meta.get("content_hash", "")
+            except Exception:
+                pass
+        return hashes
