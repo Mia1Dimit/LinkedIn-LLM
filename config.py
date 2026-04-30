@@ -37,8 +37,8 @@ CSV = {
 # Tavily enrichment folders (MD files)
 # ─────────────────────────────────────────────
 TAVILY = {
-    "companies_dir":    DATA_ROOT / "tavily_scripts" / "Companies",     # extract MDs
-    "connections_dir":  DATA_ROOT / "tavily_scripts" / "Connections",   # search MDs
+    "companies_dir":    PROJECT_ROOT / "tavily_scripts" / "Companies",     # extract MDs
+    "connections_dir":  PROJECT_ROOT / "tavily_scripts" / "Connections",   # search MDs
 }
 
 # ─────────────────────────────────────────────
