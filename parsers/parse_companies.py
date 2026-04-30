@@ -34,19 +34,33 @@ def _clean_md_text(text: str) -> str:
 def parse_company_follows_csv() -> list[DocumentChunk]:
     rows = _read_company_follows_csv()
     chunks = []
-    for row in rows:
+    seen_entity_ids: set[str] = set()
+
+    for i, row in enumerate(rows):
         org         = row.get("Organization", "").strip()
         followed_on = row.get("Followed On", "").strip()
-        li_url      = row.get("LinkedIn URL", "").strip()   # manually added column
+        li_url      = row.get("LinkedIn URL", "").strip()
 
         if not org:
             continue
+
+        # Treat "Not found" or empty as no URL
+        if li_url.lower() in ("not found", "n/a", "none", ""):
+            li_url = ""
 
         parts = [f"Company followed: {org}"]
         if followed_on: parts.append(f"Followed since: {followed_on}")
         if li_url:      parts.append(f"LinkedIn: {li_url}")
 
-        entity_id = li_url if li_url else f"company_follows::{org.lower().replace(' ', '_')}"
+        # Build entity_id — use URL if present and unique, else org slug + row index
+        org_slug = re.sub(r"[^\w]", "_", org.lower())
+        base_id  = li_url if li_url else f"company_follows::{org_slug}"
+
+        # Guarantee uniqueness within this run
+        entity_id = base_id
+        if entity_id in seen_entity_ids:
+            entity_id = f"{base_id}::{i}"
+        seen_entity_ids.add(entity_id)
 
         chunks.append(DocumentChunk(
             document="\n".join(parts),
