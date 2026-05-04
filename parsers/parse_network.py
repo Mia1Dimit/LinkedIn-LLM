@@ -124,6 +124,8 @@ def parse_connections_tavily() -> list[DocumentChunk]:
     print(f"[parse_network] Found {len(md_files)} Tavily connection MD files.")
 
     chunks = []
+    seen_entity_ids: set[str] = set()
+
     for md_path in md_files:
         raw = _parse_md_file(md_path)
         if not raw:
@@ -139,7 +141,15 @@ def parse_connections_tavily() -> list[DocumentChunk]:
         url_match = re.search(r"https://(?:www\.)?linkedin\.com/in/[\w\-]+", text)
         url = url_match.group(0) if url_match else ""
 
-        entity_id = url if url else f"tavily_search::{md_path.stem}"
+        base_id   = url if url else f"tavily_search::{md_path.stem}"
+        entity_id = base_id
+
+        if entity_id in seen_entity_ids:
+            # Duplicate MD file for the same person — make ID unique via filename
+            entity_id = f"{base_id}::{md_path.stem}"
+            print(f"[parse_network] Duplicate entity_id resolved: {base_id} → {entity_id}")
+
+        seen_entity_ids.add(entity_id)
 
         chunks.append(DocumentChunk(
             document=text,
