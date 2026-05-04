@@ -139,3 +139,9 @@ tavily_scripts/*.md
 # ChromaDB - Vector Store Data
 # ==========================================
 chroma_db/
+
+
+Phase 1/tavily_scripts/Connections/
+Phase 1/tavily_scripts/Companies/
+Phase 1/tavily_scripts/*.csv
+Phase 1/tavily_scripts/*.md
