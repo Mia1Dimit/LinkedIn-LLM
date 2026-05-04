@@ -28,39 +28,15 @@ Make sure your IAM user has `bedrock:InvokeModel` permission for:
 - `amazon.titan-embed-text-v2:0`
 - `anthropic.claude-3-sonnet-20240229-v1:0`
 
-### 3. Set your name
+### 3. Set your name & LinkedIn API token
 ```bash
 export LINKEDIN_OWNER_NAME="Dimitris"
+export LINKEDIN_PORTABILITY_TOKEN="YOUR_PORTABILITY_TOKEN_HERE"
 ```
 
-### 4. Organise your data
-```
-data/
-├── Basic_LinkedInDataExport_04-18-2026/
-│   ├── Profile.csv
-│   ├── Positions.csv
-│   ├── Connections.csv
-│   ├── Company Follows.csv      # 3rd column "LinkedIn URL" manually added
-│   ├── Education.csv
-│   ├── Skills.csv
-│   ├── Certifications.csv
-│   ├── Languages.csv
-│   ├── Publications.csv
-│   ├── messages.csv
-│   ├── Invitations.csv
-│   ├── Job Applications.csv
-│   ├── Saved Jobs.csv
-│   ├── SavedJobAlerts.csv
-│   └── Job Applicant Saved Answers.csv
-└── tavily/
-    ├── companies/               # Tavily extract MD files (1 per company)
-    └── connections/             # Tavily search MD files (1 per connection)
-```
-
-### 5. Update config.py if needed
-- Check `CSV` paths match your actual filenames exactly
-- Set `AWS_REGION` to your preferred region
-- Choose embedding model (Titan vs Cohere) — **pick one and stick with it**
+### 4. Verify cached API snapshots
+Place any pre-fetched LinkedIn Portability Snapshot API responses in `data/api_snapshots/<DOMAIN>/` (optional).
+The ingestion pipeline will fetch missing domains on first run.
 
 ---
 
@@ -142,9 +118,133 @@ linkedin_assistant/
 
 ---
 
-## Phase 2 (coming next)
+## 📋 Migration: Phase 1 → Phase 2
 
-- `ingestion/snapshot_api.py` — pull all domains from LinkedIn Portability Snapshot API
-- `ingestion/changelog_api.py` — weekly poll of Portability Changelog API
-- `ingestion/cron.py` — scheduler (weekly Tavily + Changelog, monthly Snapshot)
-- Replace CSVs as source of truth with API JSON — same parsers, new adapters
+**Phase 1 (CSV-based)** is now archived in [Phase 1/](Phase 1/) for reference.
+
+**Phase 2 (API-based)** is the current implementation:
+- ✅ Eliminates CSV dependency — data source is LinkedIn Portability Snapshot API
+- ✅ Enables automated periodic updates (future: changelog polling)
+- ✅ Same parsing & ingestion logic, adapted for API JSON format
+- ✅ New unified `ingest.py` orchestrates fetch → enrich → parse → embed → store
+
+See [Phase 1/README.md](Phase 1/README.md) for legacy documentation.
+
+---
+
+## Phase 2 — LinkedIn Portability Snapshot API
+
+Replace CSV imports with live API-sourced data. Three core workflows:
+
+### Phase 2a: Snapshot API Fetcher
+
+**Goal**: Fetch all configured domains from LinkedIn Portability Snapshot API as JSON, cache locally.
+
+**Domains** (14 total):
+- **Direct Ingestion** (9) → parsed directly to chunks & ChromaDB
+  - `PROFILE`, `POSITIONS`, `EDUCATION`, `SKILLS`, `CERTIFICATIONS`, `LANGUAGES`, `PUBLICATIONS`, `JOB_APPLICANT_SAVED_ANSWERS`, `INBOX`
+
+- **Tavily Enrichment** (2) → search public data, enrich, then ingest
+  - `CONNECTIONS` — Tavily Search API with `"<Full Name>" <Company> <Position>` (exact match)
+    - Extract: professional summary, experience, education, certifications
+  - `COMPANY_FOLLOWS` — Tavily Search API with `<Company Name> industry founding funding` (structured query)
+    - Extract: company info, industry, recent activity, founding date, size
+
+- **Activity** (3) → direct ingestion
+  - `JOB_APPLICATIONS`, `SAVED_JOBS`, `SAVED_JOB_ALERTS`
+
+**Note**: INBOX is ingested directly without enrichment (conversation content is already self-contained).
+
+**Script**: `ingestion/snapshot_api.py`
+```bash
+# Fetch all domains (requires LINKEDIN_PORTABILITY_TOKEN env var)
+python ingestion/snapshot_api.py --fetch-all
+
+# Fetch specific domains only
+python ingestion/snapshot_api.py --domains PROFILE CONNECTIONS SAVED_JOBS
+
+# Dry-run (validate token, show quota usage)
+python ingestion/snapshot_api.py --validate
+
+# Resume interrupted fetch (skips already-cached domains)
+python ingestion/snapshot_api.py --resume
+```
+
+**Caching Strategy**:
+- Cache folder: `data/api_snapshots/<domain>/<timestamp>.json`
+- Resume logic: skip already-cached domains (respects API rate limits)
+- Quota tracking: log API credits/requests per domain
+
+### Phase 2b: Tavily Enrichment Scripts
+
+**For Domains Requiring Enrichment** (CONNECTIONS, COMPANY_FOLLOWS only):
+
+#### `enrichment/enrich_connections_api.py`
+- **Input**: `data/api_snapshots/CONNECTIONS/<timestamp>.json`
+- **Process**: For each connection (First Name, Last Name, URL, Company, Position):
+  1. Query Tavily Search API with: `"<Full Name>" <Company> <Position>` (exact match)
+  2. Extract professional summary, experience, education, certifications
+- **Output**: Markdown file per connection → `data/enriched/connections/<slug>.md`
+- **Resume**: Skip already-enriched connections (by checking file existence)
+
+#### `enrichment/enrich_companies_api.py`
+- **Input**: `data/api_snapshots/COMPANY_FOLLOWS/<timestamp>.json`
+- **Process**: For each company (Organization name):
+  1. Query Tavily Search API with: `<Company Name> industry founding funding careers` (structured search)
+  2. Extract company page, industry, founding info, size, recent activity
+- **Output**: Markdown file per company → `data/enriched/companies/<slug>.md`
+- **Resume**: Skip already-enriched companies
+
+**Note**: INBOX and other domains are ingested directly without enrichment.
+
+### Phase 2c: Integrated Ingestion Pipeline
+
+New unified `ingest.py` supports Phase 2 workflows only (CSV import deprecated):
+
+```bash
+# Full pipeline (fetch → enrich → ingest)
+python ingest.py --fetch-all
+
+# Fetch API snapshots only (no ingestion)
+python ingest.py --fetch-only
+
+# Enrich only (no ingestion)
+python ingest.py --enrich-only
+
+# Ingest cached API snapshots + enriched data
+python ingest.py --ingest-only
+
+# Ingest one domain at a time
+python ingest.py --only connections
+python ingest.py --only companies
+python ingest.py --only jobs
+```
+
+**Data Flow**:
+```
+API Snapshot (JSON) → Cached (data/api_snapshots/)
+                        ↓
+For enrichment domains:  Cache → Tavily Script → Enriched MDs (data/enriched/)
+For direct domains:      Cache → Parser → Chunks → ChromaDB
+                                ↓
+                        All → ChromaDB Collections
+```
+
+**Legacy**: Phase 1 CSV workflows are archived in `Phase 1/` for reference.
+
+### Phase 2d: Changelog & Scheduler (Future)
+
+- `ingestion/changelog_api.py` — weekly incremental polls of LinkedIn changes
+- `ingestion/cron.py` — background scheduler for periodic sync
+
+---
+
+## Implementation Roadmap
+
+**Phase 2a** (this task): Implement snapshot API fetcher (`ingestion/snapshot_api.py`)
+
+**Phase 2b** (next): Implement Tavily enrichment scripts for connections, companies, inbox
+
+**Phase 2c** (then): Integrate into `ingest.py` orchestrator
+
+**Phase 2d** (future): Add changelog polling + scheduler
