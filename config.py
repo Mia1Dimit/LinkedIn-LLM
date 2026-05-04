@@ -62,7 +62,7 @@ AWS_REGION = os.getenv("AWS_REGION", "eu-west-1")
 
 BEDROCK_MODELS = {
     # LLM for RAG responses
-    "llm": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "llm": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
 
     # Embedding model — pick ONE and keep consistent (changing = re-embed everything)
     # Option A: Amazon Titan (no extra cost beyond Bedrock)
