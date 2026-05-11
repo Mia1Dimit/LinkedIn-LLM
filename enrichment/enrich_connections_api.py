@@ -143,7 +143,7 @@ def build_markdown(connection: dict, result: dict) -> str:
     ]
     
     # Add answer/summary
-    answer = result.get("answer", "").strip()
+    answer = (result.get("answer") or "").strip()
     if answer:
         lines.append(answer)
     else:
@@ -230,9 +230,9 @@ def enrich_connections(connections: list[dict], api_key: str, max_calls: int) ->
             save_markdown(output_path(connection), build_markdown(connection, result))
             credits_used += result.get("usage", {}).get("credits", 0)
             calls_made += 1
-            print(f"  ✓ Saved → {output_path(connection).name}")
+            print(f"  [OK] Saved -> {output_path(connection).name}")
         except Exception as exc:
-            print(f"  ✗ Failed: {exc}")
+            print(f"  [ERR] Failed: {exc}")
         if max_calls == 0 or calls_made < max_calls:
             time.sleep(DELAY_BETWEEN_CALLS)
 

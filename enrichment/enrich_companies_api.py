@@ -194,7 +194,7 @@ def build_markdown(company: dict, result: dict) -> str:
     # Check for founding date
     if any(word in sources_lower for word in ["founded", "established", "incorporated"]):
         for item in results[:3]:
-            content = (item.get("content", "") + " " + item.get("raw_content", "")).lower()
+            content = ((item.get("content") or "") + " " + (item.get("raw_content") or "")).lower()
             if "founded" in content or "established" in content:
                 # Try to extract year
                 year_match = re.search(r'\b(19\d{2}|20\d{2})\b', content)
@@ -205,7 +205,7 @@ def build_markdown(company: dict, result: dict) -> str:
     # Check for employee count
     if any(word in sources_lower for word in ["employee", "staff", "team size", "workforce"]):
         for item in results[:3]:
-            content = item.get("content", "") + " " + item.get("raw_content", "")
+            content = (item.get("content") or "") + " " + (item.get("raw_content") or "")
             if any(word in content.lower() for word in ["employee", "staff", "team"]):
                 # Extract number range if present
                 match = re.search(r'(\d+[,\d]*)\s*(?:-|to)\s*(\d+[,\d]*)\s*(?:employee|staff|people)', content, re.I)
@@ -231,7 +231,7 @@ def build_markdown(company: dict, result: dict) -> str:
         lines.append("")
         funding_found = False
         for item in results[:5]:
-            content = item.get("content", "") + " " + item.get("raw_content", "")
+            content = (item.get("content") or "") + " " + (item.get("raw_content") or "")
             if any(word in content.lower() for word in ["funding", "raised", "investor", "seed", "series", "round"]):
                 # Extract relevant funding information
                 round_match = re.search(r'(Series [A-Z]|Seed|Pre-seed|Funding Round)[:\s]+\$?\s*([\d.]+\s*(?:M|B|K)?)', content, re.I)
@@ -331,9 +331,9 @@ def enrich_companies(companies: list[dict], api_key: str, max_calls: int) -> Non
             save_markdown(output_path(company), build_markdown(company, result))
             credits_used += result.get("usage", {}).get("credits", 0)
             calls_made += 1
-            print(f"  ✓ Saved → {output_path(company).name}")
+            print(f"  [OK] Saved -> {output_path(company).name}")
         except Exception as exc:
-            print(f"  ✗ Failed: {exc}")
+            print(f"  [ERR] Failed: {exc}")
         if max_calls == 0 or calls_made < max_calls:
             time.sleep(DELAY_BETWEEN_CALLS)
 
