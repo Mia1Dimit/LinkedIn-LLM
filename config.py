@@ -108,12 +108,12 @@ INGEST = {
 PORTABILITY_API = {
     "base_url":     "https://api.linkedin.com/rest",
     "token":        os.getenv("LINKEDIN_PORTABILITY_TOKEN", ""),
-    "api_version":  "202501",
+    "api_version":  os.getenv("LINKEDIN_API_VERSION", "202312"),
     "snapshot_domains": [
-        "PROFILE", "POSITIONS", "EDUCATIONS", "SKILLS",
+        "PROFILE", "POSITIONS", "EDUCATION", "SKILLS",
         "CERTIFICATIONS", "LANGUAGES", "PUBLICATIONS",
-        "CONNECTIONS", "COMPANY_FOLLOWS", "MESSAGES",
-        "INVITATIONS", "JOB_APPLICATIONS", "SAVED_JOBS",
-        "SAVED_JOB_ALERTS", "JOB_APPLICANT_SAVED_ANSWERS", "ALL_LIKES"
+        "CONNECTIONS", "COMPANY_FOLLOWS", "INBOX",
+        "JOB_APPLICATIONS", "SAVED_JOBS", "SAVED_JOB_ALERTS",
+        "JOB_APPLICANT_SAVED_ANSWERS"
     ],
 }
