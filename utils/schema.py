@@ -22,6 +22,24 @@ VALID_SOURCES = {
     "tavily_search",    # Tavily Search API (connections)
     "snapshot_api",     # LinkedIn Member Data Portability Snapshot API
     "changelog_api",    # LinkedIn Member Data Portability Changelog API
+    # Domain-specific sources (from Phase 2 snapshot ingestion)
+    "PROFILE",          # Member profile data
+    "POSITIONS",        # Employment history
+    "EDUCATION",        # Education history
+    "SKILLS",           # Skills list
+    "CERTIFICATIONS",   # Certifications list
+    "LANGUAGES",        # Languages list
+    "PUBLICATIONS",     # Publications
+    "CONNECTIONS",      # Network connections
+    "COMPANY_FOLLOWS",  # Followed companies
+    "INBOX",            # Messages and inbox
+    "JOB_APPLICATIONS", # Job applications
+    "SAVED_JOBS",       # Saved job listings
+    "SAVED_JOB_ALERTS", # Job alert subscriptions
+    "JOB_APPLICANT_SAVED_ANSWERS",  # Application question answers
+    # Enrichment sources
+    "CONNECTIONS_TAVILY",  # Enriched connections via Tavily
+    "COMPANY_FOLLOWS_TAVILY",  # Enriched companies via Tavily
 }
 
 VALID_TYPES = {

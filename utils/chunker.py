@@ -86,6 +86,56 @@ def chunk_all(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
     return result
 
 
+def chunk_text(text: str, domain: str, max_tokens: int = None, overlap: int = None, metadata: dict = None) -> list[DocumentChunk]:
+    """
+    Convenience wrapper for ingest.py: converts raw text to DocumentChunk and chunks it.
+    
+    Parameters
+    ----------
+    text        : Raw document text
+    domain      : ChromaDB collection name (e.g., 'my_profile', 'my_network')
+    max_tokens  : Max chunk size in tokens (default: uses config)
+    overlap     : Overlap between chunks in tokens (default: uses config)
+    metadata    : Dict with 'type', 'source', 'entity_name' (required)
+                  Optional: 'entity_id', 'company', 'location', 'date_from', 'date_to', 'url', 'extra'
+    """
+    # Validate metadata has required fields
+    if not metadata or not all(k in metadata for k in ['type', 'source', 'entity_name']):
+        raise ValueError(f"metadata must include: type, source, entity_name")
+    
+    # Generate entity_id if not provided (use hashed entity_name + source)
+    entity_id = metadata.get('entity_id')
+    if not entity_id:
+        import hashlib
+        hash_input = f"{metadata['source']}::{metadata['entity_name']}"
+        entity_id = hashlib.md5(hash_input.encode()).hexdigest()[:8]
+    
+    # Create DocumentChunk from raw text
+    chunk = DocumentChunk(
+        document=text,
+        collection=domain,
+        source=metadata['source'],
+        type=metadata['type'],
+        entity_id=entity_id,
+        entity_name=metadata['entity_name'],
+        company=metadata.get('company'),
+        location=metadata.get('location'),
+        date_from=metadata.get('date_from'),
+        date_to=metadata.get('date_to'),
+        url=metadata.get('url'),
+        extra=metadata.get('extra', {}),
+    )
+    
+    # Use provided limits or defaults
+    if max_tokens is None or overlap is None:
+        default_max, default_overlap = _defaults_for_type(chunk.type)
+        max_tokens = max_tokens or default_max
+        overlap = overlap or default_overlap
+    
+    # Chunk and return
+    return chunk_document(chunk, max_tokens=max_tokens, overlap_tokens=overlap)
+
+
 def _defaults_for_type(doc_type: str) -> tuple[int, int]:
     """Return (max_tokens, overlap_tokens) for a given document type."""
     message_types = {"message_thread"}

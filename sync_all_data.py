@@ -150,7 +150,7 @@ def show_status() -> None:
     print("="*70 + "\n")
     
     print(f"Last Fetch:                    {state.get('last_fetch', 'Never')}")
-    print(f"Data Status:                   {'🔴 STALE (>24h)' if stale else '🟢 FRESH'}")
+    print(f"Data Status:                   {'[STALE]' if stale else '[FRESH]'} (>24h old)" if stale else "Data Status:                   [FRESH]")
     print(f"Last Enrichment:               {state.get('last_enrichment', 'Never')}")
     print(f"Last Ingestion:                {state.get('last_ingest', 'Never')}")
     print(f"Last Full Sync:                {state.get('last_full_sync', 'Never')}")
@@ -187,7 +187,7 @@ def run_fetch(force_refresh: bool = False) -> bool:
     
     # Check if data is stale
     if not force_refresh and not is_data_stale():
-        print("  ✓ Snapshots are fresh (<24h), skipping fetch")
+        print("  [OK] Snapshots are fresh (<24h), skipping fetch")
         print("  (use --force-refresh to ignore cache)\n")
         return True
     
@@ -199,7 +199,7 @@ def run_fetch(force_refresh: bool = False) -> bool:
     result = subprocess.run(cmd, cwd=REPO_ROOT)
     
     if result.returncode != 0:
-        print("\n  ✗ Fetch failed")
+        print("\n  [ERROR] Fetch failed")
         return False
     
     # Update state
@@ -207,11 +207,11 @@ def run_fetch(force_refresh: bool = False) -> bool:
     state["last_fetch"] = datetime.now().isoformat()
     save_state(state)
     
-    print("\n  ✓ Fetch complete")
+    print("\n  [OK] Fetch complete")
     return True
 
 
-def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
+def run_enrichment(max_credits: Optional[int] = None, dry_run: bool = False) -> tuple[bool, int]:
     """Enrich pending connections and companies."""
     print("\n[2/3] Enriching New Entities")
     print("="*70 + "\n")
@@ -219,7 +219,7 @@ def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
     pending_conn, pending_comp = count_pending_enrichments()
     
     if pending_conn == 0 and pending_comp == 0:
-        print("  ✓ No pending enrichments")
+        print("  [OK] No pending enrichments")
         return True, 0
     
     estimated_cost = pending_conn * 2 + pending_comp
@@ -230,8 +230,8 @@ def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
     
     # Determine enrichment strategy
     if max_credits and estimated_cost > max_credits:
-        print(f"  ⚠ Budget constraint: {max_credits} credits available, {estimated_cost} needed")
-        print(f"  Strategy: Prioritize connections (more recent data)\n")
+        print(f"  [BUDGET] Budget constraint: {max_credits} credits available, {estimated_cost} needed")
+        print(f"  [BUDGET] Strategy: Prioritize connections (more recent data)\n")
         
         max_connections = min(pending_conn, max_credits // 2)
         max_companies = min(pending_comp, (max_credits - (max_connections * 2)))
@@ -249,6 +249,8 @@ def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
             "enrichment/enrich_connections_api.py",
             "--max", str(max_connections),
         ]
+        if dry_run:
+            cmd.insert(2, "--dry-run")
         result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
         
         # Extract credits from output
@@ -261,9 +263,9 @@ def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
                         pass
         
         if result.returncode != 0:
-            print(f"    ⚠ Enrichment had issues, but continuing...")
+            print(f"    [WARN] Enrichment had issues, but continuing...")
         else:
-            print(f"    ✓ Completed\n")
+            print(f"    [OK] Completed\n")
     
     # Enrich companies
     if max_companies > 0:
@@ -273,6 +275,8 @@ def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
             "enrichment/enrich_companies_api.py",
             "--max", str(max_companies),
         ]
+        if dry_run:
+            cmd.insert(2, "--dry-run")
         result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
         
         # Extract credits from output
@@ -285,9 +289,9 @@ def run_enrichment(max_credits: Optional[int] = None) -> tuple[bool, int]:
                         pass
         
         if result.returncode != 0:
-            print(f"    ⚠ Enrichment had issues, but continuing...")
+            print(f"    [WARN] Enrichment had issues, but continuing...")
         else:
-            print(f"    ✓ Completed\n")
+            print(f"    [OK] Completed\n")
     
     # Update state
     state = load_state()
@@ -313,7 +317,7 @@ def run_ingest(dry_run: bool = False) -> bool:
     result = subprocess.run(cmd, cwd=REPO_ROOT)
     
     if result.returncode != 0:
-        print("\n  ✗ Ingestion failed")
+        print("\n  [ERROR] Ingestion failed")
         return False
     
     # Update state
@@ -332,7 +336,7 @@ def run_ingest(dry_run: bool = False) -> bool:
     
     save_state(state)
     
-    print("\n  ✓ Ingestion complete")
+    print("\n  [OK] Ingestion complete")
     return True
 
 
@@ -350,7 +354,7 @@ def run_full_sync(dry_run: bool = False, force_refresh: bool = False,
     
     # Step 2: Enrich
     if not skip_enrich:
-        success, credits = run_enrichment(max_credits=max_credits)
+        success, credits = run_enrichment(max_credits=max_credits, dry_run=dry_run)
         if not success:
             return False
     
@@ -360,7 +364,7 @@ def run_full_sync(dry_run: bool = False, force_refresh: bool = False,
     
     # Final summary
     print("\n" + "="*70)
-    print("  ✓ Synchronization Complete!")
+    print("  [OK] Synchronization Complete!")
     print("="*70 + "\n")
     
     show_status()

@@ -596,9 +596,9 @@ def parse_all_snapshots(verbose: bool = False) -> Dict[str, List[DocumentChunk]]
             chunks = parser(elements)
             all_chunks[domain] = chunks
             if verbose:
-                print(f"  [{domain}] ✓ {len(chunks)} chunks")
+                print(f"  [{domain}] [OK] {len(chunks)} chunks")
         except Exception as e:
-            print(f"  [{domain}] ✗ Parse error: {e}")
+            print(f"  [{domain}] [ERROR] Parse error: {e}")
     
     return all_chunks
 
@@ -639,7 +639,7 @@ def ingest_chunks(all_chunks: Dict[str, List[DocumentChunk]], dry_run: bool = Fa
         store.upsert(collection, chunks)
         total_ingested += len(chunks)
     
-    print(f"\n  ✓ Ingested {total_ingested} total chunks")
+    print(f"\n  [OK] Ingested {total_ingested} total chunks")
 
 
 def show_stats():
@@ -691,7 +691,7 @@ def run():
             raise SystemExit(1)
     
     if args.fetch_only:
-        print("\n✓ Fetch complete.\n")
+        print("\n[OK] Fetch complete.\n")
         return
     
     # ── Enrich
@@ -701,7 +701,7 @@ def run():
     # ── Parse
     print("\n[3/4] Parsing Snapshots\n")
     all_chunks = parse_all_snapshots(verbose=args.verbose)
-    print(f"  ✓ Parsed {sum(len(c) for c in all_chunks.values())} total chunks")
+    print(f"  [OK] Parsed {sum(len(c) for c in all_chunks.values())} total chunks")
     
     # ── Ingest
     if not args.dry_run:
