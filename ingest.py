@@ -98,8 +98,8 @@ def run_enrichment_scripts():
     print("="*70 + "\n")
     
     enrichment_scripts = [
-        ("ingestion/enrich_connections_api.py", "Enriching connections..."),
-        ("ingestion/enrich_companies_api.py", "Enriching companies..."),
+        ("enrichment/enrich_connections_api.py", "Enriching connections..."),
+        ("enrichment/enrich_companies_api.py", "Enriching companies..."),
     ]
     
     for script, label in enrichment_scripts:
@@ -110,7 +110,7 @@ def run_enrichment_scripts():
         
         print(f"  {label}")
         result = subprocess.run(
-            ["python", script],
+            [sys.executable, script],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
