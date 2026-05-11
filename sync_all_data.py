@@ -207,6 +207,20 @@ def run_enrichment(max_credits: Optional[int] = None, dry_run: bool = False) -> 
     print("\n[2/3] Enriching New Entities")
     print("="*70 + "\n")
     
+    # In dry-run mode, just report what would be enriched without calling Tavily
+    if dry_run:
+        pending_conn, pending_comp = count_pending_enrichments()
+        print(f"  [DRY RUN] Would enrich {pending_conn} connections and {pending_comp} companies")
+        print(f"  [DRY RUN] Estimated cost: ~{pending_conn * 2 + pending_comp} Tavily credits\n")
+        return True, 0
+    
+    # Check Tavily key before attempting enrichment
+    tavily_key = resolve_tavily_api_key()
+    if not tavily_key:
+        print("  [WARN] TAVILY_API_KEY not set — skipping enrichment")
+        print("  Set TAVILY_API_KEY env var or add data/creds/tavily_key.json to enable enrichment\n")
+        return True, 0
+    
     pending_conn, pending_comp = count_pending_enrichments()
     
     if pending_conn == 0 and pending_comp == 0:
@@ -240,25 +254,23 @@ def run_enrichment(max_credits: Optional[int] = None, dry_run: bool = False) -> 
             "enrichment/enrich_connections_api.py",
             "--max", str(max_connections),
         ]
-        if dry_run:
-            cmd.insert(2, "--dry-run")
         result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
         
         # Extract credits from output
-        if "Credits reported:" in result.stdout:
-            for line in result.stdout.split('\n'):
-                if "Credits reported:" in line:
-                    try:
-                        credits_used += int(line.split(":")[-1].strip())
-                    except ValueError:
-                        pass
+        for line in result.stdout.split('\n'):
+            if "Credits reported:" in line:
+                try:
+                    credits_used += int(line.split(":")[-1].strip())
+                except ValueError:
+                    pass
         
         if result.returncode != 0:
-            print(f"    [WARN] Enrichment had issues, but continuing...")
+            print(f"    [WARN] Connections enrichment exited with code {result.returncode}, continuing...")
         else:
             print(f"    [OK] Completed\n")
-    
-    # Enrich companies
     if max_companies > 0:
         print(f"  Enriching {max_companies}/{pending_comp} companies...")
         cmd = [
@@ -266,21 +278,21 @@ def run_enrichment(max_credits: Optional[int] = None, dry_run: bool = False) -> 
             "enrichment/enrich_companies_api.py",
             "--max", str(max_companies),
         ]
-        if dry_run:
-            cmd.insert(2, "--dry-run")
         result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
         
         # Extract credits from output
-        if "Credits reported:" in result.stdout:
-            for line in result.stdout.split('\n'):
-                if "Credits reported:" in line:
-                    try:
-                        credits_used += int(line.split(":")[-1].strip())
-                    except ValueError:
-                        pass
+        for line in result.stdout.split('\n'):
+            if "Credits reported:" in line:
+                try:
+                    credits_used += int(line.split(":")[-1].strip())
+                except ValueError:
+                    pass
         
         if result.returncode != 0:
-            print(f"    [WARN] Enrichment had issues, but continuing...")
+            print(f"    [WARN] Companies enrichment exited with code {result.returncode}, continuing...")
         else:
             print(f"    [OK] Completed\n")
     
