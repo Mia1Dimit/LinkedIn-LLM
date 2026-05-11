@@ -164,7 +164,7 @@ def parse_profile_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk
             max_tokens=INGEST.get("profile_max_tokens", 400),
             overlap=INGEST.get("profile_overlap", 0),
             metadata={
-                "type": "profile",
+                "type": "profile_bio",
                 "source": "PROFILE",
                 "entity_name": f"{snapshot_data.get('First Name', '')} {snapshot_data.get('Last Name', '')}",
             }
@@ -231,7 +231,7 @@ def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentC
                 max_tokens=INGEST.get("default_max_tokens", 400),
                 overlap=INGEST.get("default_overlap", 50),
                 metadata={
-                    "type": "connection",
+                    "type": "connection_profile",
                     "source": "CONNECTIONS",
                     "entity_name": f"{snapshot_data.get('First Name', '')} {snapshot_data.get('Last Name', '')}",
                 }
@@ -250,7 +250,7 @@ def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentC
                 max_tokens=INGEST.get("tavily_max_tokens", 500),
                 overlap=INGEST.get("tavily_overlap", 50),
                 metadata={
-                    "type": "connection_enriched",
+                    "type": "connection_profile",
                     "source": "CONNECTIONS_TAVILY",
                     "entity_name": md_file.stem,
                 }
@@ -279,7 +279,7 @@ def parse_companies_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
                 max_tokens=INGEST.get("default_max_tokens", 400),
                 overlap=INGEST.get("default_overlap", 50),
                 metadata={
-                    "type": "company",
+                    "type": "company_profile",
                     "source": "COMPANY_FOLLOWS",
                     "entity_name": snapshot_data.get('Organization', ''),
                 }
@@ -298,7 +298,7 @@ def parse_companies_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
                 max_tokens=INGEST.get("tavily_max_tokens", 500),
                 overlap=INGEST.get("tavily_overlap", 50),
                 metadata={
-                    "type": "company_enriched",
+                    "type": "company_profile",
                     "source": "COMPANY_FOLLOWS_TAVILY",
                     "entity_name": md_file.stem,
                 }
@@ -335,9 +335,9 @@ def parse_jobs_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
                 max_tokens=INGEST.get("default_max_tokens", 400),
                 overlap=INGEST.get("default_overlap", 50),
                 metadata={
-                    "type": "job",
-                    "source": elem.get("snapshotDomain", "JOBS"),
-                    "entity_name": snapshot_data.get('Company', ''),
+                    "type": "job_application" if "Applied Date" in snapshot_data else ("saved_job_alert" if not snapshot_data.get("Company") else "saved_job"),
+                    "source": elem.get("snapshotDomain", "JOB_APPLICATIONS"),
+                    "entity_name": snapshot_data.get('Company', snapshot_data.get('Job Title', '')),
                 }
             ))
     
@@ -393,7 +393,7 @@ def parse_skills_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]
         max_tokens=INGEST.get("profile_max_tokens", 400),
         overlap=0,
         metadata={
-            "type": "skills",
+            "type": "skill",
             "source": "SKILLS",
             "entity_name": "Skills",
         }
@@ -450,7 +450,7 @@ def parse_languages_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
         max_tokens=INGEST.get("profile_max_tokens", 400),
         overlap=0,
         metadata={
-            "type": "languages",
+            "type": "language",
             "source": "LANGUAGES",
             "entity_name": "Languages",
         }
@@ -516,7 +516,7 @@ def parse_inbox_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
             max_tokens=INGEST.get("messages_max_tokens", 300),
             overlap=INGEST.get("messages_overlap", 100),
             metadata={
-                "type": "message",
+                "type": "message_thread",
                 "source": "INBOX",
                 "entity_name": "Conversation",
             }
@@ -636,7 +636,7 @@ def ingest_chunks(all_chunks: Dict[str, List[DocumentChunk]], dry_run: bool = Fa
             continue
         
         print(f"  [{domain} → {collection}] Ingesting {len(chunks)} chunks...")
-        store.upsert(collection, chunks)
+        store.upsert(chunks)
         total_ingested += len(chunks)
     
     print(f"\n  [OK] Ingested {total_ingested} total chunks")
