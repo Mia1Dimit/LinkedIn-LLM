@@ -97,42 +97,33 @@ def count_pending_enrichments() -> tuple[int, int]:
     pending_connections = 0
     pending_companies = 0
     
-    # Count connections needing enrichment (check both Phase 2 and Phase 1)
+    # Count connections needing enrichment — check Phase 2 output only.
+    # The enrichment scripts handle Phase 1 → Phase 2 legacy copy internally.
     conn_enriched_dir = ENRICHED_DIR / "connections"
-    phase1_conn_dir = REPO_ROOT / "Phase 1" / "tavily_scripts" / "Connections"
-    
-    enriched_files = set()
+    enriched_conn_files = set()
     if conn_enriched_dir.exists():
-        enriched_files.update(f.stem for f in conn_enriched_dir.glob("*.md"))
-    if phase1_conn_dir.exists():
-        enriched_files.update(f.stem for f in phase1_conn_dir.glob("*.md"))
+        enriched_conn_files = {f.stem for f in conn_enriched_dir.glob("*.md")}
     
-    # Read snapshots to count unique connections
     from enrichment.enrich_connections_api import load_connections
+    from enrichment.common import slugify_linkedin_url, slugify_text
     try:
         connections = load_connections()
-        from enrichment.common import slugify_linkedin_url
         pending_connections = len([c for c in connections 
-                                  if f"Connection_{slugify_linkedin_url(c['url'])}" not in enriched_files])
+                                  if f"Connection_{slugify_linkedin_url(c['url'])}" not in enriched_conn_files])
     except Exception:
         pending_connections = 0
     
-    # Count companies needing enrichment (check both Phase 2 and Phase 1)
+    # Count companies needing enrichment — check Phase 2 output only.
     comp_enriched_dir = ENRICHED_DIR / "companies"
-    phase1_comp_dir = REPO_ROOT / "Phase 1" / "tavily_scripts" / "Companies"
-    
-    enriched_files = set()
+    enriched_comp_files = set()
     if comp_enriched_dir.exists():
-        enriched_files.update(f.stem for f in comp_enriched_dir.glob("*.md"))
-    if phase1_comp_dir.exists():
-        enriched_files.update(f.stem for f in phase1_comp_dir.glob("*.md"))
+        enriched_comp_files = {f.stem for f in comp_enriched_dir.glob("*.md")}
     
     from enrichment.enrich_companies_api import load_companies
     try:
         companies = load_companies()
-        from enrichment.common import slugify_text
         pending_companies = len([c for c in companies 
-                                if f"Company_{slugify_text(c['organization'])}" not in enriched_files])
+                                if f"Company_{slugify_text(c['organization'])}" not in enriched_comp_files])
     except Exception:
         pending_companies = 0
     
