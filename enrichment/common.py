@@ -95,7 +95,20 @@ def snapshot_rows(domain: str) -> list[dict[str, Any]]:
 
 
 def resolve_tavily_api_key() -> str:
-    return os.getenv("TAVILY_API_KEY", "").strip()
+    key = os.getenv("TAVILY_API_KEY", "").strip()
+    if key:
+        return key
+    # Fallback: load from credentials file
+    creds_path = REPO_ROOT / "data" / "creds" / "tavily_key.json"
+    if creds_path.exists():
+        try:
+            payload = json.loads(creds_path.read_text(encoding="utf-8"))
+            key = str(payload.get("api_key", "")).strip()
+            if key:
+                return key
+        except Exception:
+            pass
+    return ""
 
 
 def get_tavily_usage(api_key: str) -> Optional[dict[str, Any]]:
