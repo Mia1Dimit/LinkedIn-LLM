@@ -105,9 +105,9 @@ def build_query(connection: dict) -> str:
     name = f"{connection['first_name']} {connection['last_name']}".strip()
     parts = [f'"{name}"'] if name else []
     if connection.get("company"):
-        parts.append(f'"{connection["company"]}"')
+        parts.append(connection["company"])  # unquoted — exact_match on company+title too often returns 0 results
     if connection.get("position"):
-        parts.append(f'"{connection["position"]}"')
+        parts.append(connection["position"])  # unquoted
     # Request structured information: background, expertise, past roles, education, specialties
     parts.append("professional background career experience expertise specialties education")
     return " ".join(parts)

@@ -106,7 +106,7 @@ def build_query(company: dict) -> str:
     # Request specific structured fields: founding info, funding, employees, investors, 
     # specialties, recent announcements, and links to key company profiles
     query_parts = [
-        f'"{organization}"',
+        f'"{organization}"',  # only org name quoted; rest unquoted to avoid zero results
         "company founded founding date",
         "funding rounds investors seed series",
         "employee count team size",
