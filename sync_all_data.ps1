@@ -30,18 +30,29 @@ function Invoke-Step {
     param(
         [string]$Name,
         [string]$Command,
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [switch]$StreamOutput
     )
 
+    $effectiveArguments = $Arguments
+    if ($StreamOutput -and $Command -eq "python" -and -not ($Arguments -contains "-u")) {
+        $effectiveArguments = @("-u") + $Arguments
+    }
+
     Write-Log "START: $Name" "STEP"
-    Write-Log "Command: $Command $($Arguments -join ' ')"
+    Write-Log "Command: $Command $($effectiveArguments -join ' ')"
 
     $start = Get-Date
-    $output = & $Command @Arguments 2>&1
+    if ($StreamOutput) {
+        $output = & $Command @effectiveArguments 2>&1 | Tee-Object -FilePath $script:LogFile -Append
+    }
+    else {
+        $output = & $Command @effectiveArguments 2>&1
+    }
     $exitCode = $LASTEXITCODE
     $duration = [math]::Round(((Get-Date) - $start).TotalSeconds, 2)
 
-    if ($null -ne $output) {
+    if ($null -ne $output -and -not $StreamOutput) {
         foreach ($line in $output) {
             Add-Content -Path $script:LogFile -Value $line
             Write-Host $line
@@ -103,6 +114,35 @@ function Test-SnapshotsFresh {
     Write-Log "Snapshot age: $([math]::Round($ageHours, 2)) hours"
 
     return ($ageHours -lt $Hours)
+}
+
+function Get-IngestStatus {
+    $output = & python ingestion/ingest_status.py 2>&1
+    $exitCode = $LASTEXITCODE
+
+    if ($null -ne $output) {
+        foreach ($line in $output) {
+            Add-Content -Path $script:LogFile -Value $line
+        }
+    }
+
+    if ($exitCode -ne 0) {
+        Write-Log "Could not compute ingest status; defaulting to conservative ingest behavior" "WARN"
+        return $null
+    }
+
+    $jsonText = ($output | Out-String)
+    $jsonStart = $jsonText.IndexOf('{')
+    if ($jsonStart -ge 0) {
+        $jsonText = $jsonText.Substring($jsonStart)
+    }
+    try {
+        return $jsonText | ConvertFrom-Json
+    }
+    catch {
+        Write-Log "Failed to parse ingest status JSON; defaulting to conservative ingest behavior" "WARN"
+        return $null
+    }
 }
 
 $script:RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -171,9 +211,29 @@ try {
     else {
         $didFetch = $false
         $didEnrich = $false
+        $ingestStatus = $null
+
+        $pendingTotal = 0
+        if ($pendingCompanies -gt 0) { $pendingTotal += $pendingCompanies }
+        if ($pendingConnections -gt 0) { $pendingTotal += $pendingConnections }
+
+        if ($pendingTotal -eq 0) {
+            Write-Log "Checking whether local parsed chunks already need ingest before considering fetch"
+            $ingestStatus = Get-IngestStatus
+            if ($ingestStatus -and $ingestStatus.collections) {
+                foreach ($prop in $ingestStatus.collections.PSObject.Properties) {
+                    $name = $prop.Name
+                    $row = $prop.Value
+                    Write-Log "Ingest status [$name]: parsed=$($row.parsed), current=$($row.current), missing=$($row.missing), changed=$($row.changed), unchanged=$($row.unchanged)"
+                }
+            }
+        }
 
         if ($SkipFetch) {
             Write-Log "Skipping fetch stage by request" "WARN"
+        }
+        elseif (-not $ForceFetch -and $ingestStatus -and $ingestStatus.ingest_needed) {
+            Write-Log "Skipping fetch: local parsed chunk differences already require ingest; use -ForceFetch to refresh snapshots first" "WARN"
         }
         elseif (-not $ForceFetch -and (Test-SnapshotsFresh -Hours $SnapshotFreshHours)) {
             Write-Log "Skipping fetch: snapshots are fresh (< $SnapshotFreshHours hours)" "WARN"
@@ -184,10 +244,6 @@ try {
                 $didFetch = $true
             }
         }
-
-        $pendingTotal = 0
-        if ($pendingCompanies -gt 0) { $pendingTotal += $pendingCompanies }
-        if ($pendingConnections -gt 0) { $pendingTotal += $pendingConnections }
 
         if ($SkipEnrich) {
             Write-Log "Skipping enrich stage by request" "WARN"
@@ -202,14 +258,26 @@ try {
             }
         }
 
+        if (-not $didFetch -and -not $didEnrich -and -not $ingestStatus) {
+            Write-Log "Checking whether parsed chunks differ from stored chunks before deciding ingest"
+            $ingestStatus = Get-IngestStatus
+            if ($ingestStatus -and $ingestStatus.collections) {
+                foreach ($prop in $ingestStatus.collections.PSObject.Properties) {
+                    $name = $prop.Name
+                    $row = $prop.Value
+                    Write-Log "Ingest status [$name]: parsed=$($row.parsed), current=$($row.current), missing=$($row.missing), changed=$($row.changed), unchanged=$($row.unchanged)"
+                }
+            }
+        }
+
         if ($SkipIngest) {
             Write-Log "Skipping ingest stage by request" "WARN"
         }
-        elseif (-not $ForceIngest -and -not $didFetch -and -not $didEnrich) {
+        elseif (-not $ForceIngest -and -not $didFetch -and -not $didEnrich -and $ingestStatus -and -not $ingestStatus.ingest_needed) {
             Write-Log "Skipping ingest: no upstream changes (fetch/enrich skipped)" "WARN"
         }
         else {
-            Invoke-Step -Name "Ingest into ChromaDB" -Command "python" -Arguments @("ingest.py", "--ingest-only") | Out-Null
+            Invoke-Step -Name "Ingest into ChromaDB" -Command "python" -Arguments @("ingest.py", "--ingest-only") -StreamOutput | Out-Null
         }
 
         Invoke-Step -Name "Post-run ChromaDB stats" -Command "python" -Arguments @("ingest.py", "--stats") | Out-Null

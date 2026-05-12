@@ -135,11 +135,18 @@ def load_snapshot_json(domain: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def iter_snapshot_rows(elements: List[Dict[str, Any]]):
+    """Yield (element, row) pairs for every snapshotData row in the payload."""
+    for elem in elements:
+        for row in elem.get("snapshotData", []):
+            if isinstance(row, dict):
+                yield elem, row
+
+
 def parse_profile_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
     """Parse PROFILE snapshot."""
     chunks = []
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
+    for _, snapshot_data in iter_snapshot_rows(elements):
         
         # Build profile document
         lines = [
@@ -173,16 +180,15 @@ def parse_profile_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk
 def parse_positions_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
     """Parse POSITIONS snapshot."""
     chunks = []
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
+    for _, snapshot_data in iter_snapshot_rows(elements):
         
         lines = [
             f"# {snapshot_data.get('Title', 'Position')}",
             f"**Company**: {snapshot_data.get('Company Name', '')}",
             f"**Employment Type**: {snapshot_data.get('Employment Type', '')}",
             f"**Location**: {snapshot_data.get('Location', '')}",
-            f"**Start Date**: {snapshot_data.get('Start Date', '')}",
-            f"**End Date**: {snapshot_data.get('End Date', 'Present')}",
+            f"**Start Date**: {snapshot_data.get('Started On', snapshot_data.get('Start Date', ''))}",
+            f"**End Date**: {snapshot_data.get('Finished On', snapshot_data.get('End Date', 'Present'))}",
             "",
             "## Description",
             snapshot_data.get('Description', ''),
@@ -273,23 +279,50 @@ def parse_jobs_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
     
     for elem in elements:
         for snapshot_data in elem.get("snapshotData", []):
-            lines = [
-                f"# {snapshot_data.get('Job Title', snapshot_data.get('Title', 'Job'))}",
-                f"**Company**: {snapshot_data.get('Company', '')}",
-                f"**Location**: {snapshot_data.get('Location', '')}",
-            ]
-            
-            # Handle optional fields depending on source
-            if "Applied Date" in snapshot_data:
-                lines.append(f"**Applied**: {snapshot_data.get('Applied Date', '')}")
-            if "Saved Date" in snapshot_data:
-                lines.append(f"**Saved**: {snapshot_data.get('Saved Date', '')}")
-            if "Description" in snapshot_data:
-                lines.append(f"\n## Description\n\n{snapshot_data.get('Description', '')}")
+            source = elem.get("snapshotDomain", "JOB_APPLICATIONS")
+
+            if source == "SAVED_JOB_ALERTS":
+                saved_search_id = snapshot_data.get("SAVED_SEARCH_ID", "")
+                query_context = snapshot_data.get("QUERY_CONTEXT", "")
+                alert_parameters = snapshot_data.get("ALERT_PARAMETERS", "")
+                lines = [
+                    f"# Saved Job Alert {saved_search_id or 'Alert'}",
+                    f"**Saved Search ID**: {saved_search_id}",
+                    "",
+                    "## Query Context",
+                    query_context,
+                    "",
+                    "## Alert Parameters",
+                    alert_parameters,
+                ]
+                entity_name = f"Saved Job Alert {saved_search_id}" if saved_search_id else "Saved Job Alert"
+                doc_type = "saved_job_alert"
+            else:
+                lines = [
+                    f"# {snapshot_data.get('Job Title', snapshot_data.get('Title', 'Job'))}",
+                    f"**Company**: {snapshot_data.get('Company Name', snapshot_data.get('Company', ''))}",
+                    f"**Location**: {snapshot_data.get('Location', '')}",
+                ]
+
+                if "Application Date" in snapshot_data or "Applied Date" in snapshot_data:
+                    lines.append(f"**Applied**: {snapshot_data.get('Application Date', snapshot_data.get('Applied Date', ''))}")
+                if "Saved Date" in snapshot_data:
+                    lines.append(f"**Saved**: {snapshot_data.get('Saved Date', '')}")
+                if "Job Url" in snapshot_data:
+                    lines.append(f"**Job URL**: {snapshot_data.get('Job Url', '')}")
+                if "Contact Email" in snapshot_data:
+                    lines.append(f"**Contact Email**: {snapshot_data.get('Contact Email', '')}")
+                if "Contact Phone Number" in snapshot_data:
+                    lines.append(f"**Contact Phone**: {snapshot_data.get('Contact Phone Number', '')}")
+                if "Question And Answers" in snapshot_data:
+                    lines.append(f"\n## Application Questions\n\n{snapshot_data.get('Question And Answers', '')}")
+                if "Description" in snapshot_data:
+                    lines.append(f"\n## Description\n\n{snapshot_data.get('Description', '')}")
+
+                entity_name = snapshot_data.get('Company Name', snapshot_data.get('Job Title', ''))
+                doc_type = "job_application" if ("Application Date" in snapshot_data or "Applied Date" in snapshot_data) else "saved_job"
             
             content = "\n".join(lines)
-
-            source = elem.get("snapshotDomain", "JOB_APPLICATIONS")
             # Build a stable per-row ID from the full snapshot payload to avoid
             # duplicate chunk IDs when multiple rows share title/company values.
             row_payload = json.dumps(snapshot_data, sort_keys=True, ensure_ascii=False)
@@ -301,10 +334,11 @@ def parse_jobs_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
                 max_tokens=CHUNK["default_max_tokens"],
                 overlap=CHUNK["default_overlap"],
                 metadata={
-                    "type": "job_application" if "Applied Date" in snapshot_data else ("saved_job_alert" if not snapshot_data.get("Company") else "saved_job"),
+                    "type": doc_type,
                     "source": source,
-                    "entity_name": snapshot_data.get('Company', snapshot_data.get('Job Title', '')),
+                    "entity_name": entity_name,
                     "entity_id": entity_id,
+                    "url": snapshot_data.get('Job Url', ''),
                 }
             ))
     
@@ -315,17 +349,15 @@ def parse_education_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
     """Parse EDUCATION snapshot."""
     chunks = []
     
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
+    for _, snapshot_data in iter_snapshot_rows(elements):
         
         lines = [
             f"# {snapshot_data.get('School Name', 'Education')}",
             f"**Degree**: {snapshot_data.get('Degree Name', '')}",
-            f"**Field of Study**: {snapshot_data.get('Field of Study', '')}",
+            f"**Activities**: {snapshot_data.get('Activities', '')}",
             f"**Start Date**: {snapshot_data.get('Start Date', '')}",
             f"**End Date**: {snapshot_data.get('End Date', '')}",
-            f"**Grade**: {snapshot_data.get('Grade', '')}",
-            f"**Description**: {snapshot_data.get('Description', '')}",
+            f"**Notes**: {snapshot_data.get('Notes', '')}",
         ]
         
         content = "\n".join(lines)
@@ -349,7 +381,7 @@ def parse_skills_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]
     """Parse SKILLS snapshot."""
     chunks = []
     
-    skills = [elem.get("snapshotData", [{}])[0].get("Skill", "") for elem in elements]
+    skills = [row.get("Name", row.get("Skill", "")) for _, row in iter_snapshot_rows(elements)]
     skills = [s for s in skills if s]
     
     content = "# Skills\n\n" + "\n".join(f"- {skill}" for skill in skills)
@@ -373,16 +405,15 @@ def parse_certifications_snapshot(elements: List[Dict[str, Any]]) -> List[Docume
     """Parse CERTIFICATIONS snapshot."""
     chunks = []
     
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
+    for _, snapshot_data in iter_snapshot_rows(elements):
         
         lines = [
             f"# {snapshot_data.get('Name', 'Certification')}",
-            f"**Issuer**: {snapshot_data.get('Issuer Organization Name', '')}",
-            f"**Issued**: {snapshot_data.get('Issued On', '')}",
-            f"**Expires**: {snapshot_data.get('Expires On', '')}",
-            f"**Credential**: {snapshot_data.get('Credential ID', '')}",
-            f"**URL**: {snapshot_data.get('Credential URL', '')}",
+            f"**Issuer**: {snapshot_data.get('Authority', snapshot_data.get('Issuer Organization Name', ''))}",
+            f"**Issued**: {snapshot_data.get('Started On', snapshot_data.get('Issued On', ''))}",
+            f"**Expires**: {snapshot_data.get('Finished On', snapshot_data.get('Expires On', ''))}",
+            f"**Credential**: {snapshot_data.get('License Number', snapshot_data.get('Credential ID', ''))}",
+            f"**URL**: {snapshot_data.get('Url', snapshot_data.get('Credential URL', ''))}",
         ]
         
         content = "\n".join(lines)
@@ -406,7 +437,11 @@ def parse_languages_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
     """Parse LANGUAGES snapshot."""
     chunks = []
     
-    languages = [elem.get("snapshotData", [{}])[0].get("Language", "") for elem in elements]
+    languages = []
+    for _, row in iter_snapshot_rows(elements):
+        name = row.get("Name", row.get("Language", ""))
+        proficiency = row.get("Proficiency", "")
+        languages.append(f"{name} ({proficiency})" if name and proficiency else name)
     languages = [l for l in languages if l]
     
     content = "# Languages\n\n" + "\n".join(f"- {lang}" for lang in languages)
@@ -430,15 +465,14 @@ def parse_publications_snapshot(elements: List[Dict[str, Any]]) -> List[Document
     """Parse PUBLICATIONS snapshot."""
     chunks = []
     
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
+    for _, snapshot_data in iter_snapshot_rows(elements):
         
         lines = [
-            f"# {snapshot_data.get('Title', 'Publication')}",
+            f"# {snapshot_data.get('Name', snapshot_data.get('Title', 'Publication'))}",
             f"**Publisher**: {snapshot_data.get('Publisher', '')}",
             f"**Published Date**: {snapshot_data.get('Published On', '')}",
             f"**Description**: {snapshot_data.get('Description', '')}",
-            f"**URL**: {snapshot_data.get('Publication URL', '')}",
+            f"**URL**: {snapshot_data.get('Url', snapshot_data.get('Publication URL', ''))}",
         ]
         
         content = "\n".join(lines)
@@ -451,7 +485,7 @@ def parse_publications_snapshot(elements: List[Dict[str, Any]]) -> List[Document
             metadata={
                 "type": "publication",
                 "source": "PUBLICATIONS",
-                "entity_name": snapshot_data.get('Title', ''),
+                "entity_name": snapshot_data.get('Name', snapshot_data.get('Title', '')),
             }
         ))
     
@@ -459,36 +493,71 @@ def parse_publications_snapshot(elements: List[Dict[str, Any]]) -> List[Document
 
 
 def parse_inbox_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
-    """Parse INBOX (messages) snapshot."""
+    """Parse INBOX snapshot by grouping message rows into conversation threads."""
     chunks = []
-    
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
-        
-        # Group messages by conversation
+    conversations: Dict[str, Dict[str, Any]] = {}
+
+    for _, snapshot_data in iter_snapshot_rows(elements):
+        conversation_id = str(snapshot_data.get("CONVERSATION ID", "")).strip() or "unknown"
+        thread = conversations.setdefault(
+            conversation_id,
+            {
+                "title": str(snapshot_data.get("CONVERSATION TITLE", "")).strip(),
+                "subject": str(snapshot_data.get("SUBJECT", "")).strip(),
+                "participants": set(),
+                "messages": [],
+            },
+        )
+
+        sender = str(snapshot_data.get("FROM", "")).strip()
+        recipients = str(snapshot_data.get("TO", "")).strip()
+        date = str(snapshot_data.get("DATE", "")).strip()
+        content = str(snapshot_data.get("CONTENT", "")).strip()
+
+        if sender:
+            thread["participants"].add(sender)
+        if recipients:
+            for recipient in recipients.split(","):
+                recipient = recipient.strip()
+                if recipient:
+                    thread["participants"].add(recipient)
+
+        message_lines = [
+            f"### {date or 'Unknown date'}",
+            f"From: {sender or 'Unknown sender'}",
+        ]
+        if recipients:
+            message_lines.append(f"To: {recipients}")
+        if content:
+            message_lines.extend(["", content])
+        thread["messages"].append("\n".join(message_lines))
+
+    for conversation_id, thread in conversations.items():
+        title = thread["title"] or thread["subject"] or f"Conversation {conversation_id}"
+        participants = ", ".join(sorted(thread["participants"]))
         lines = [
-            f"# Conversation",
-            f"**Participants**: {snapshot_data.get('Participants', '')}",
-            f"**Last Message**: {snapshot_data.get('Last Activity', '')}",
+            f"# {title}",
+            f"**Conversation ID**: {conversation_id}",
+            f"**Participants**: {participants}",
             "",
             "## Messages",
-            snapshot_data.get('Messages', ''),
+            "",
+            "\n\n".join(thread["messages"]),
         ]
-        
-        content = "\n".join(lines)
-        
+
         chunks.extend(chunk_text(
-            text=content,
+            text="\n".join(lines),
             domain="communications",
             max_tokens=CHUNK["messages_max_tokens"],
             overlap=CHUNK["messages_overlap"],
             metadata={
                 "type": "message_thread",
                 "source": "INBOX",
-                "entity_name": "Conversation",
+                "entity_name": title,
+                "entity_id": conversation_id,
             }
         ))
-    
+
     return chunks
 
 
@@ -496,8 +565,7 @@ def parse_job_saved_answers_snapshot(elements: List[Dict[str, Any]]) -> List[Doc
     """Parse JOB_APPLICANT_SAVED_ANSWERS snapshot."""
     chunks = []
     
-    for elem in elements:
-        snapshot_data = elem.get("snapshotData", [{}])[0]
+    for _, snapshot_data in iter_snapshot_rows(elements):
         
         lines = [
             f"# Application Answer",
