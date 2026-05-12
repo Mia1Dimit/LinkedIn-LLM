@@ -67,11 +67,47 @@ def output_path(connection: dict) -> Path:
     return OUTPUT_DIR / f"Connection_{slugify_linkedin_url(connection['url'])}.md"
 
 
+def is_connection_enriched(connection: dict) -> bool:
+    """Check if connection is enriched, handling URL changes via name-based fallback."""
+    # First, check if file exists with current URL's slug
+    if file_has_content(output_path(connection)):
+        return True
+    
+    # Fallback: search existing enriched files by name
+    # (handles case where LinkedIn URL changed but file still exists)
+    if not OUTPUT_DIR.exists():
+        return False
+    
+    first_name = connection.get("first_name", "").strip().lower()
+    last_name = connection.get("last_name", "").strip().lower()
+    
+    # Strip common suffixes from last name (e.g., ", LLM", ", PhD", ", MBA")
+    # These appear in the snapshot but usually not in the enriched file header
+    last_name_base = last_name.split(',')[0].strip() if ',' in last_name else last_name
+    
+    for existing_file in OUTPUT_DIR.glob("Connection_*.md"):
+        if not file_has_content(existing_file):
+            continue
+        # Read file header to extract name
+        content = existing_file.read_text(encoding="utf-8", errors="ignore")
+        lines = content.split('\n')
+        if lines and lines[0].startswith("# "):
+            file_name = lines[0][2:].strip().lower()
+            
+            # Check if this file is for the same person
+            # Both first and last name (base) should be present
+            if first_name and last_name_base:
+                if first_name in file_name and last_name_base in file_name:
+                    return True
+    
+    return False
+
+
 def split_pending(connections: list[dict]) -> tuple[list[dict], int]:
     pending = []
     enriched = 0
     for connection in connections:
-        if file_has_content(output_path(connection)):
+        if is_connection_enriched(connection):
             enriched += 1
         else:
             pending.append(connection)
