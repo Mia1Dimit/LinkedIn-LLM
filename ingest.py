@@ -37,6 +37,8 @@ import os
 import sys
 import argparse
 import subprocess
+import json
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -328,6 +330,12 @@ def parse_jobs_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
                 lines.append(f"\n## Description\n\n{snapshot_data.get('Description', '')}")
             
             content = "\n".join(lines)
+
+            source = elem.get("snapshotDomain", "JOB_APPLICATIONS")
+            # Build a stable per-row ID from the full snapshot payload to avoid
+            # duplicate chunk IDs when multiple rows share title/company values.
+            row_payload = json.dumps(snapshot_data, sort_keys=True, ensure_ascii=False)
+            entity_id = hashlib.sha1(f"{source}::{row_payload}".encode("utf-8")).hexdigest()[:12]
             
             chunks.extend(chunk_text(
                 text=content,
@@ -336,8 +344,9 @@ def parse_jobs_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
                 overlap=INGEST.get("default_overlap", 50),
                 metadata={
                     "type": "job_application" if "Applied Date" in snapshot_data else ("saved_job_alert" if not snapshot_data.get("Company") else "saved_job"),
-                    "source": elem.get("snapshotDomain", "JOB_APPLICATIONS"),
+                    "source": source,
                     "entity_name": snapshot_data.get('Company', snapshot_data.get('Job Title', '')),
+                    "entity_id": entity_id,
                 }
             ))
     

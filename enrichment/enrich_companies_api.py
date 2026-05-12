@@ -122,7 +122,7 @@ def build_markdown(company: dict, result: dict) -> str:
     organization = company["organization"]
     
     # Extract main answer/overview
-    answer = result.get("answer", "").strip()
+    answer = (result.get("answer") or "").strip()
     
     # Build header section similar to Phase 1
     lines = [
@@ -259,11 +259,11 @@ def build_markdown(company: dict, result: dict) -> str:
         url = item.get('url', '')
         if url:
             lines.append(f"**URL:** {url}")
-        content = item.get("content", "").strip()
+        content = (item.get("content") or "").strip()
         if content:
             lines.append("")
             lines.append(content[:2000])  # Limit to 2000 chars per source
-        raw_content = item.get("raw_content", "").strip()
+        raw_content = (item.get("raw_content") or "").strip()
         if raw_content and raw_content != content:
             lines.append("")
             lines.append(raw_content[:2000])  # Limit to 2000 chars
