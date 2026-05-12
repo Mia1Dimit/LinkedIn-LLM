@@ -29,10 +29,6 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 
 ### Setup
 
-## Quick Start
-
-### Setup
-
 ```bash
 pip install -r requirements.txt
 export LINKEDIN_PORTABILITY_TOKEN="YOUR_TOKEN"
@@ -142,53 +138,51 @@ For now, data is indexed in ChromaDB. Query interface (`query/ask.py`) coming so
 
 For more details, see **[ARCHITECTURE.md](ARCHITECTURE.md)** or check archived docs in **[docs/](docs/)**.
 
-
-New unified `ingest.py` supports Phase 2 workflows only (CSV import deprecated):
-
-```bash
-# Full pipeline (fetch → enrich → ingest)
-python ingest.py --fetch-all
-
-# Fetch API snapshots only (no ingestion)
-python ingest.py --fetch-only
-
-# Enrich only (no ingestion)
-python ingest.py --enrich-only
-
-# Ingest cached API snapshots + enriched data
-python ingest.py --ingest-only
-
-# Ingest one domain at a time
-python ingest.py --only connections
-python ingest.py --only companies
-python ingest.py --only jobs
-```
-
-**Data Flow**:
-```
-API Snapshot (JSON) → Cached (data/api_snapshots/)
-                        ↓
-For enrichment domains:  Cache → Tavily Script → Enriched MDs (data/enriched/)
-For direct domains:      Cache → Parser → Chunks → ChromaDB
-                                ↓
-                        All → ChromaDB Collections
-```
-
-**Legacy**: Phase 1 CSV workflows are archived in `Phase 1/` for reference.
-
-### Phase 2d: Changelog & Scheduler (Future)
-
-- `ingestion/changelog_api.py` — weekly incremental polls of LinkedIn changes
-- `ingestion/cron.py` — background scheduler for periodic sync
-
 ---
 
-## Implementation Roadmap
+## Windows Modular Sync Runner
 
-**Phase 2a** (this task): Implement snapshot API fetcher (`ingestion/snapshot_api.py`)
+Use [sync_all_data.ps1](sync_all_data.ps1) when you want modular execution and timestamped logs per run.
 
-**Phase 2b** (next): Implement Tavily enrichment scripts for connections, companies, inbox
+Default sequence:
 
-**Phase 2c** (then): Integrate into `ingest.py` orchestrator
+```powershell
+./sync_all_data.ps1
+```
 
-**Phase 2d** (future): Add changelog polling + scheduler
+This runs, in order:
+1. `python ingest.py --fetch-only`
+2. `python enrichment/enrich_companies_api.py --stats`
+3. `python enrichment/enrich_connections_api.py --stats`
+4. `python ingest.py --enrich-only`
+5. `python ingest.py --ingest-only`
+6. `python ingest.py --stats`
+
+Smart skip behavior is built in:
+1. Skip fetch when snapshots are fresh (default threshold: 24h)
+2. Skip enrich when pending companies and connections are both 0
+3. Skip ingest when both fetch and enrich were skipped (no upstream changes)
+
+Logs are written to `logs/sync/sync_YYYYMMDD_HHMMSS.log`.
+
+Each run also logs Tavily diagnostics:
+1. key source (`env:TAVILY_API_KEY` or `data/creds/tavily_key.json`)
+2. masked key fingerprint
+3. live usage from Tavily usage API (project-scoped when `TAVILY_PROJECT_ID` is set)
+
+Useful switches:
+
+```powershell
+./sync_all_data.ps1 -StatsOnly
+./sync_all_data.ps1 -SkipFetch
+./sync_all_data.ps1 -SkipEnrich
+./sync_all_data.ps1 -SkipIngest
+./sync_all_data.ps1 -ContinueOnError
+./sync_all_data.ps1 -ForceFetch
+./sync_all_data.ps1 -ForceIngest
+./sync_all_data.ps1 -SnapshotFreshHours 12
+./sync_all_data.ps1 -TavilyApiKey "tvly-..."
+./sync_all_data.ps1 -TavilyProjectId "proj_..."
+```
+
+`sync_all_data.py` is now a compatibility wrapper that forwards to this PowerShell runner.

@@ -115,9 +115,14 @@ def get_tavily_usage(api_key: str) -> Optional[dict[str, Any]]:
     if not api_key:
         return None
     try:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        project_id = os.getenv("TAVILY_PROJECT_ID", "").strip()
+        if project_id:
+            headers["X-Project-ID"] = project_id
+
         response = requests.get(
             TAVILY_USAGE_ENDPOINT,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
             timeout=30,
         )
         response.raise_for_status()

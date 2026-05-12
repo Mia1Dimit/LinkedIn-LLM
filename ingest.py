@@ -54,7 +54,6 @@ from utils.chunker import chunk_text
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-TOKEN = os.getenv("LINKEDIN_PORTABILITY_TOKEN", "")
 SNAPSHOT_CACHE_DIR = REPO_ROOT / "data" / "api_snapshots"
 ENRICHED_DIR = REPO_ROOT / "data" / "enriched"
 
@@ -73,10 +72,6 @@ DOMAINS = {
 
 def run_snapshot_fetcher(domains: Optional[List[str]] = None, skip_cache: bool = False):
     """Orchestrate snapshot API fetcher."""
-    if not TOKEN or TOKEN.startswith("YOUR"):
-        print("ERROR: LINKEDIN_PORTABILITY_TOKEN not set.\n")
-        raise SystemExit(1)
-    
     cmd = ["python", "ingestion/snapshot_api.py"]
     
     if domains:
