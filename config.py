@@ -13,32 +13,36 @@ PROJECT_ROOT = Path(__file__).parent
 DATA_ROOT    = PROJECT_ROOT / "data"          # put your CSVs + MD folders here
 
 # ─────────────────────────────────────────────
-# CSV file paths (Phase 1 bootstrap)
+# [DEPRECATED] Phase 1 CSV file paths — Not used in Phase 2
+# These are preserved for archival reference only.
+# Phase 2 uses LinkedIn Portability API snapshots exclusively.
 # ─────────────────────────────────────────────
-CSV = {
-    "profile":              DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Profile.csv",
-    "positions":            DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Positions.csv",
-    "education":            DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Education.csv",
-    "skills":               DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Skills.csv",
-    "certifications":       DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Certifications.csv",
-    "languages":            DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Languages.csv",
-    "publications":         DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Publications.csv",
-    "connections":          DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Connections.csv",
-    "company_follows":      DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Company Follows.csv",
-    "messages":             DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "messages.csv",
-    "invitations":          DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Invitations.csv",
-    "job_applications":     DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Job Applications.csv",
-    "saved_jobs":           DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Saved Jobs.csv",
-    "saved_job_alerts":     DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "SavedJobAlerts.csv",
-    "job_saved_answers":    DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Job Applicant Saved Answers.csv",
-}
+# CSV = {
+#     "profile":              DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Profile.csv",
+#     "positions":            DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Positions.csv",
+#     "education":            DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Education.csv",
+#     "skills":               DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Skills.csv",
+#     "certifications":       DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Certifications.csv",
+#     "languages":            DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Languages.csv",
+#     "publications":         DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Publications.csv",
+#     "connections":          DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Connections.csv",
+#     "company_follows":      DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Company Follows.csv",
+#     "messages":             DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "messages.csv",
+#     "invitations":          DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Invitations.csv",
+#     "job_applications":     DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Job Applications.csv",
+#     "saved_jobs":           DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Saved Jobs.csv",
+#     "saved_job_alerts":     DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "SavedJobAlerts.csv",
+#     "job_saved_answers":    DATA_ROOT / "Basic_LinkedInDataExport_04-18-2026" / "Job Applicant Saved Answers.csv",
+# }
 
 # ─────────────────────────────────────────────
 # Tavily enrichment folders (MD files)
+# Unified Phase 2 location — all enriched MDs live here regardless of phase.
+# Phase 1 files were merged into these dirs via enrichment/common.py:sync_legacy_*
 # ─────────────────────────────────────────────
 TAVILY = {
-    "companies_dir":    PROJECT_ROOT / "tavily_scripts" / "Companies",     # extract MDs
-    "connections_dir":  PROJECT_ROOT / "tavily_scripts" / "Connections",   # search MDs
+    "companies_dir":    DATA_ROOT / "enriched" / "companies",
+    "connections_dir":  DATA_ROOT / "enriched" / "connections",
 }
 
 # ─────────────────────────────────────────────

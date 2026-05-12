@@ -5,14 +5,18 @@ Phase 2 company enrichment via Tavily Search API.
 Reads the latest cached COMPANY_FOLLOWS snapshot, reports the pending
 enrichment backlog, and optionally enriches each followed company into markdown
 files under data/enriched/companies.
+
+Supports date-based filtering: only enrich companies followed after --start-date.
 """
 
 import argparse
+import json
 import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -32,6 +36,7 @@ from enrichment.common import (
     sync_legacy_companies,
     utc_timestamp,
 )
+from enrichment.skip_list import SKIP_COMPANIES
 
 
 TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search"
@@ -40,9 +45,40 @@ REQUEST_TIMEOUT = 30
 DELAY_BETWEEN_CALLS = 0.5
 OUTPUT_DIR = ENRICHED_DIR / "companies"
 ESTIMATED_CREDITS_PER_CALL = 1
+CONFIG_FILE = REPO_ROOT / "enrichment" / "enrichment_config.json"
 
 
-def load_companies() -> list[dict]:
+# ── Config Management ─────────────────────────────────────────────────────────
+
+def load_enrichment_config() -> dict:
+    """Load enrichment configuration (start dates, tracking info)."""
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "companies_enrichment": {
+            "start_date": "2026-04-16",
+            "last_enriched_date": None,
+        }
+    }
+
+
+def save_enrichment_config(config: dict) -> None:
+    """Save enrichment configuration."""
+    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
+# ── Loading and Filtering ─────────────────────────────────────────────────────
+
+def load_companies(start_date: Optional[str] = None) -> list[dict]:
+    """
+    Load companies from COMPANY_FOLLOWS snapshot.
+    
+    If start_date is provided, only include companies followed after this date.
+    Automatically skips companies in the SKIP_COMPANIES list.
+    """
     rows = snapshot_rows("COMPANY_FOLLOWS")
     unique_by_org: dict[str, dict] = {}
     for row in rows:
@@ -56,11 +92,26 @@ def load_companies() -> list[dict]:
                 "organization": organization,
                 "followed_on": followed_on,
             }
-    return sorted(
+    
+    companies = sorted(
         unique_by_org.values(),
         key=lambda item: parse_date(item.get("followed_on", "")) or datetime.min,
         reverse=True,
     )
+    
+    # Filter by start_date if provided
+    if start_date:
+        start_dt = parse_date(start_date)
+        if start_dt:
+            companies = [
+                c for c in companies
+                if (parse_date(c.get("followed_on", "")) or datetime.min) > start_dt
+            ]
+    
+    # Remove blacklisted companies
+    companies = [c for c in companies if c["organization"] not in SKIP_COMPANIES]
+    
+    return companies
 
 
 def output_path(company: dict) -> Path:
@@ -277,14 +328,15 @@ def save_markdown(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def print_stats(companies: list[dict], pending: list[dict], enriched: int, usage: dict | None, reused_legacy: int = 0) -> None:
+def print_stats(companies: list[dict], pending: list[dict], enriched: int, usage: dict | None, start_date: Optional[str] = None) -> None:
     latest_date = next((item.get("followed_on", "") for item in companies if item.get("followed_on")), "")
     estimated_credits = len(pending) * ESTIMATED_CREDITS_PER_CALL
     print(f"\n{'=' * 68}")
-    print("  Phase 2b — Companies Enrichment Backlog")
+    print("  Companies Enrichment Status")
     print(f"{'=' * 68}")
-    print(f"  {'Unique companies:':<28} {len(companies)}")
-    print(f"  {'Reused from Phase 1:':<28} {reused_legacy}")
+    if start_date:
+        print(f"  {'Start date filter:':<28} {start_date} (exclusive)")
+    print(f"  {'Total in snapshot:':<28} {len(companies)}")
     print(f"  {'Already enriched:':<28} {enriched}")
     print(f"  {'Pending enrichment:':<28} {len(pending)}")
     print(f"  {'Latest follow date:':<28} {latest_date or 'N/A'}")
@@ -304,19 +356,26 @@ def print_stats(companies: list[dict], pending: list[dict], enriched: int, usage
     print(f"{'=' * 68}\n")
 
 
-def enrich_companies(companies: list[dict], api_key: str, max_calls: int) -> None:
+def enrich_companies(companies: list[dict], api_key: str, max_calls: int, start_date: Optional[str] = None) -> Optional[str]:
+    """
+    Enrich companies via Tavily API.
+    
+    Returns the most recent followed_on date from successfully enriched companies,
+    which should be saved as the new start_date for future runs.
+    """
     if not api_key:
         print("ERROR: Set TAVILY_API_KEY to enrich companies.\n")
         raise SystemExit(1)
 
-    reused_legacy = sync_legacy_companies(companies, OUTPUT_DIR)
+    sync_legacy_companies(companies, OUTPUT_DIR)  # Silently sync legacy files (no stats reporting)
     pending, enriched = split_pending(companies)
     usage = get_tavily_usage(api_key)
-    print_stats(companies, pending, enriched, usage, reused_legacy=reused_legacy)
+    print_stats(companies, pending, enriched, usage, start_date=start_date)
 
     if not pending:
-        return
+        return None
 
+    most_recent_date = None
     calls_made = 0
     credits_used = 0
     for index, company in enumerate(pending, 1):
@@ -332,6 +391,12 @@ def enrich_companies(companies: list[dict], api_key: str, max_calls: int) -> Non
             credits_used += int((result.get("usage") or {}).get("credits", 0) or 0)
             save_markdown(output_path(company), build_markdown(company, result))
             print(f"  [OK] Saved -> {output_path(company).name}")
+            
+            # Track most recent date successfully enriched
+            company_date = parse_date(company.get("followed_on", ""))
+            if company_date:
+                if most_recent_date is None or company_date > most_recent_date:
+                    most_recent_date = company_date
         except Exception as exc:
             print(f"  [ERR] Failed: {exc}")
         if max_calls == 0 or calls_made < max_calls:
@@ -339,21 +404,39 @@ def enrich_companies(companies: list[dict], api_key: str, max_calls: int) -> Non
 
     print(f"\nCalls made: {calls_made}")
     print(f"Credits reported: {credits_used}\n")
+    
+    # Return the most recent date to be saved in config
+    return most_recent_date.strftime("%m/%d/%y, %I:%M %p") if most_recent_date else None
+
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Enrich cached followed companies via Tavily Search.")
     parser.add_argument("--max", type=int, default=0, metavar="N", help="Maximum Tavily calls to make. 0 = no limit.")
     parser.add_argument("--stats", action="store_true", help="Show backlog and estimated credit usage without calling Tavily.")
+    parser.add_argument("--start-date", type=str, metavar="DATE", help="Only enrich companies followed after this date (e.g., '04/16/26').")
     args = parser.parse_args()
 
-    companies = load_companies()
-    reused_legacy = sync_legacy_companies(companies, OUTPUT_DIR)
+    # Load config to get start_date if not provided via CLI
+    config = load_enrichment_config()
+    start_date = args.start_date or config.get("companies_enrichment", {}).get("start_date")
+
+    companies = load_companies(start_date=start_date)
+    sync_legacy_companies(companies, OUTPUT_DIR)  # Silently sync legacy files (no stats reporting)
     pending, enriched = split_pending(companies)
     usage = get_tavily_usage(resolve_tavily_api_key())
-    print_stats(companies, pending, enriched, usage, reused_legacy=reused_legacy)
+    print_stats(companies, pending, enriched, usage, start_date=start_date)
+    
     if not args.stats:
-        enrich_companies(companies, resolve_tavily_api_key(), args.max)
+        most_recent_date = enrich_companies(companies, resolve_tavily_api_key(), args.max, start_date=start_date)
+        
+        # Update config with the most recent date processed
+        if most_recent_date:
+            config["companies_enrichment"]["last_enriched_date"] = most_recent_date
+            config["companies_enrichment"]["start_date"] = most_recent_date
+            save_enrichment_config(config)
+            print(f"✅ Updated start_date to: {most_recent_date}")
+            print(f"   Next run will only enrich companies followed after this date.\n")
 
 
 if __name__ == "__main__":

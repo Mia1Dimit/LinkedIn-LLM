@@ -130,7 +130,10 @@ class VectorStore:
             raise ValueError(f"Unknown collection '{name}'. Valid: {list(self._collections.keys())}")
         return self._collections[name]
 
-    # ── Upsert ────────────────────────────────
+    def count(self, collection_name: str) -> int:
+        """Get the number of chunks in a collection."""
+        coll = self._get_collection(collection_name)
+        return coll.count()
 
     def upsert(self, chunks: list[DocumentChunk], verbose: bool = True) -> dict:
         """

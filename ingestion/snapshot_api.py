@@ -29,7 +29,8 @@ import time
 import argparse
 import requests
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, UTC
+from urllib.parse import urljoin, urlparse, parse_qs
 from typing import Optional, Dict, List, Any
 
 # Allow imports from parent directory
@@ -41,13 +42,40 @@ from config import PORTABILITY_API
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-TOKEN = os.getenv("LINKEDIN_PORTABILITY_TOKEN", "")
+TOKEN = ""
 BASE_URL = PORTABILITY_API["base_url"]
 API_VERSION = PORTABILITY_API["api_version"]
 SNAPSHOT_DOMAINS = PORTABILITY_API["snapshot_domains"]
 CACHE_DIR = REPO_ROOT / "data" / "api_snapshots"
 REQUEST_TIMEOUT = 60
 DELAY_BETWEEN_REQUESTS = 0.5  # seconds
+
+
+def resolve_token() -> str:
+    """Resolve portability token from env or known credentials files."""
+    env_token = os.getenv("LINKEDIN_PORTABILITY_TOKEN", "").strip()
+    if env_token:
+        return env_token
+
+    candidate_paths = [
+        REPO_ROOT / "linkedin_api_creds.json",
+        REPO_ROOT / "data" / "creds" / "linkedin_api_creds.json",
+    ]
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        access_token = str(payload.get("access_token", "")).strip()
+        if access_token:
+            return access_token
+
+    return str(PORTABILITY_API.get("token", "")).strip()
+
+
+TOKEN = resolve_token()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -93,11 +121,15 @@ def load_cache(domain: str) -> Optional[Dict[str, Any]]:
 
 def save_cache(domain: str, data: Dict[str, Any]) -> Path:
     """Save snapshot to cache with timestamp."""
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     cache_path = get_domain_cache_dir(domain) / f"{domain}_{timestamp}.json"
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     return cache_path
+
+
+class SnapshotNoDataError(RuntimeError):
+    """Raised when LinkedIn reports no snapshot data for the member/domain."""
 
 
 # ── LinkedIn API ────────────────────────────────────────────────────────────────
@@ -109,6 +141,33 @@ def build_headers() -> Dict[str, str]:
         "Content-Type": "application/json",
         "LinkedIn-Version": API_VERSION,
     }
+
+
+def extract_next_start(paging: Dict[str, Any]) -> Optional[int]:
+    """Read the next page index from LinkedIn paging links."""
+    for link in paging.get("links", []):
+        if link.get("rel") != "next":
+            continue
+        href = link.get("href", "")
+        if not href:
+            continue
+        parsed = urlparse(href)
+        query = parse_qs(parsed.query)
+        next_values = query.get("start", [])
+        if next_values:
+            try:
+                return int(next_values[0])
+            except ValueError:
+                return None
+    return None
+
+
+def snapshot_item_count(data: Dict[str, Any]) -> int:
+    """Count records inside snapshotData payloads across all elements."""
+    total = 0
+    for element in data.get("elements", []):
+        total += len(element.get("snapshotData", []))
+    return total
 
 
 def fetch_snapshot(domain: str, start: int = 0, count: int = 10) -> Dict[str, Any]:
@@ -140,6 +199,8 @@ def fetch_snapshot(domain: str, start: int = 0, count: int = 10) -> Dict[str, An
         status_code = e.response.status_code
         if status_code == 401:
             raise RuntimeError("Unauthorized: Invalid or missing LINKEDIN_PORTABILITY_TOKEN")
+        elif status_code == 404 and "No data found" in e.response.text:
+            raise SnapshotNoDataError(e.response.text)
         elif status_code == 429:
             raise RuntimeError("Rate limited: Please retry after a delay")
         else:
@@ -148,7 +209,7 @@ def fetch_snapshot(domain: str, start: int = 0, count: int = 10) -> Dict[str, An
         raise RuntimeError(f"Request failed: {str(e)}")
 
 
-def fetch_domain_paginated(domain: str, max_results: Optional[int] = None) -> Dict[str, Any]:
+def fetch_domain_paginated(domain: str, max_results: Optional[int] = None, count: int = 10) -> Dict[str, Any]:
     """
     Fetch all pages of a snapshot domain via pagination.
     
@@ -156,43 +217,62 @@ def fetch_domain_paginated(domain: str, max_results: Optional[int] = None) -> Di
     """
     print(f"  Fetching: {domain}")
     
-    all_elements = []
+    merged_snapshot_data = []
+    snapshot_domain = domain
     start = 0
-    count = 10
     pages_fetched = 0
+    seen_starts = set()
     
     while True:
-        result = fetch_snapshot(domain, start=start, count=count)
+        if start in seen_starts:
+            raise RuntimeError(f"Pagination loop detected for {domain} at start={start}")
+        seen_starts.add(start)
+
+        try:
+            result = fetch_snapshot(domain, start=start, count=count)
+        except SnapshotNoDataError:
+            if pages_fetched == 0:
+                return {
+                    "paging": {"start": 0, "count": 0, "total": 0},
+                    "elements": [],
+                }
+            break
+
         paging = result.get("paging", {})
         elements = result.get("elements", [])
-        
-        all_elements.extend(elements)
+
+        if elements:
+            snapshot_domain = elements[0].get("snapshotDomain", domain)
+        for element in elements:
+            merged_snapshot_data.extend(element.get("snapshotData", []))
+
         pages_fetched += 1
         
         # Check if we should continue
-        has_next = any(
-            link.get("rel") == "next"
-            for link in paging.get("links", [])
-        )
-        
-        if not has_next:
+        next_start = extract_next_start(paging)
+        if next_start is None:
             break
         
         # Check if we've hit max results limit
-        if max_results and len(all_elements) >= max_results:
-            all_elements = all_elements[:max_results]
+        if max_results and len(merged_snapshot_data) >= max_results:
+            merged_snapshot_data = merged_snapshot_data[:max_results]
             break
         
-        start += count
+        start = next_start
         time.sleep(DELAY_BETWEEN_REQUESTS)
     
     return {
         "paging": {
             "start": 0,
-            "count": len(all_elements),
-            "total": len(all_elements),
+            "count": len(merged_snapshot_data),
+            "total": len(merged_snapshot_data),
         },
-        "elements": all_elements,
+        "elements": [
+            {
+                "snapshotDomain": snapshot_domain,
+                "snapshotData": merged_snapshot_data,
+            }
+        ] if merged_snapshot_data else [],
     }
 
 
@@ -201,7 +281,7 @@ def fetch_domain_paginated(domain: str, max_results: Optional[int] = None) -> Di
 def validate_token() -> bool:
     """Validate token by doing a lightweight request."""
     if not TOKEN or TOKEN.startswith("YOUR"):
-        print("ERROR: LINKEDIN_PORTABILITY_TOKEN not set or invalid.\n")
+        print("ERROR: LinkedIn portability token not found in env or credentials file.\n")
         return False
     
     print("Validating token...")
@@ -235,8 +315,9 @@ def fetch_domains(
     stats = {
         "fetched": 0,
         "cached": 0,
+        "empty": 0,
         "failed": 0,
-        "total_elements": 0,
+        "total_records": 0,
     }
     
     ensure_cache_dir()
@@ -248,11 +329,11 @@ def fetch_domains(
             cached_data = load_cache(domain)
             if cached_data:
                 results[domain] = cached_data
-                element_count = len(cached_data.get("elements", []))
+                element_count = snapshot_item_count(cached_data)
                 stats["cached"] += 1
-                stats["total_elements"] += element_count
+                stats["total_records"] += element_count
                 if verbose:
-                    print(f"      {element_count} elements")
+                    print(f"      {element_count} records")
                 continue
         
         # Fetch fresh
@@ -262,13 +343,17 @@ def fetch_domains(
             
             # Save to cache
             cache_path = save_cache(domain, data)
-            element_count = len(data.get("elements", []))
+            element_count = snapshot_item_count(data)
             
             results[domain] = data
-            stats["fetched"] += 1
-            stats["total_elements"] += element_count
-            
-            print(f"      ✓ {element_count} elements → {cache_path.name}")
+            stats["total_records"] += element_count
+
+            if element_count == 0:
+                stats["empty"] += 1
+                print(f"      ○ No snapshot data yet → {cache_path.name}")
+            else:
+                stats["fetched"] += 1
+                print(f"      ✓ {element_count} records → {cache_path.name}")
             
             # Delay before next request to respect rate limits
             time.sleep(DELAY_BETWEEN_REQUESTS)
@@ -363,8 +448,9 @@ def run():
     print("  Fetch Summary")
     print(f"  {'Fetched (fresh):':<25} {stats['fetched']}")
     print(f"  {'Cached (reused):':<25} {stats['cached']}")
+    print(f"  {'Empty (not ready):':<25} {stats['empty']}")
     print(f"  {'Failed:':<25} {stats['failed']}")
-    print(f"  {'Total elements:':<25} {stats['total_elements']}")
+    print(f"  {'Total records:':<25} {stats['total_records']}")
     print(f"{'='*70}\n")
     
     # Show cache info

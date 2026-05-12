@@ -175,14 +175,13 @@ def save_markdown(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def print_stats(connections: list[dict], pending: list[dict], enriched: int, usage: dict | None, reused_legacy: int = 0) -> None:
+def print_stats(connections: list[dict], pending: list[dict], enriched: int, usage: dict | None) -> None:
     latest_date = next((item.get("connected_on", "") for item in connections if item.get("connected_on")), "")
     estimated_credits = len(pending) * ESTIMATED_CREDITS_PER_CALL
     print(f"\n{'=' * 68}")
-    print("  Phase 2b — Connections Enrichment Backlog")
+    print("  Connections Enrichment Status")
     print(f"{'=' * 68}")
-    print(f"  {'Unique connections:':<28} {len(connections)}")
-    print(f"  {'Reused from Phase 1:':<28} {reused_legacy}")
+    print(f"  {'Total in snapshot:':<28} {len(connections)}")
     print(f"  {'Already enriched:':<28} {enriched}")
     print(f"  {'Pending enrichment:':<28} {len(pending)}")
     print(f"  {'Latest connection date:':<28} {latest_date or 'N/A'}")
@@ -207,10 +206,10 @@ def enrich_connections(connections: list[dict], api_key: str, max_calls: int) ->
         print("ERROR: Set TAVILY_API_KEY to enrich connections.\n")
         raise SystemExit(1)
 
-    reused_legacy = sync_legacy_connections(connections, OUTPUT_DIR)
+    sync_legacy_connections(connections, OUTPUT_DIR)  # Silently sync legacy files (no stats reporting)
     pending, enriched = split_pending(connections)
     usage = get_tavily_usage(api_key)
-    print_stats(connections, pending, enriched, usage, reused_legacy=reused_legacy)
+    print_stats(connections, pending, enriched, usage)
 
     if not pending:
         return
@@ -247,10 +246,10 @@ def main() -> None:
     args = parser.parse_args()
 
     connections = load_connections()
-    reused_legacy = sync_legacy_connections(connections, OUTPUT_DIR)
+    sync_legacy_connections(connections, OUTPUT_DIR)  # Silently sync legacy files (no stats reporting)
     pending, enriched = split_pending(connections)
     usage = get_tavily_usage(resolve_tavily_api_key())
-    print_stats(connections, pending, enriched, usage, reused_legacy=reused_legacy)
+    print_stats(connections, pending, enriched, usage)
     if not args.stats:
         enrich_connections(connections, resolve_tavily_api_key(), args.max)
 

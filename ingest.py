@@ -47,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from config import PORTABILITY_API, INGEST, COLLECTIONS
+from config import PORTABILITY_API, INGEST, COLLECTIONS, CHUNK
 from db.vector_store import VectorStore
 from utils.schema import DocumentChunk
 from utils.chunker import chunk_text
@@ -163,8 +163,8 @@ def parse_profile_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk
         chunks.extend(chunk_text(
             text=content,
             domain="my_profile",
-            max_tokens=INGEST.get("profile_max_tokens", 400),
-            overlap=INGEST.get("profile_overlap", 0),
+            max_tokens=CHUNK["profile_max_tokens"],
+            overlap=CHUNK["profile_overlap"],
             metadata={
                 "type": "profile_bio",
                 "source": "PROFILE",
@@ -198,7 +198,7 @@ def parse_positions_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
         chunks.extend(chunk_text(
             text=content,
             domain="my_profile",
-            max_tokens=INGEST.get("profile_max_tokens", 400),
+            max_tokens=CHUNK["profile_max_tokens"],
             overlap=0,
             metadata={
                 "type": "position",
@@ -211,35 +211,15 @@ def parse_positions_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
 
 
 def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
-    """Parse CONNECTIONS snapshot (enriched with Tavily MDs)."""
+    """Parse CONNECTIONS using enriched Tavily markdown only.
+
+    The snapshot rows are intentionally not chunked to avoid duplicate network
+    profiles across legacy/base sources. CONNECTIONS data in Chroma should come
+    from CONNECTIONS_TAVILY markdown files under data/enriched/connections.
+    """
     chunks = []
-    
-    # First, add basic connection data
-    for elem in elements:
-        for snapshot_data in elem.get("snapshotData", []):
-            lines = [
-                f"# {snapshot_data.get('First Name', '')} {snapshot_data.get('Last Name', '')}",
-                f"**Company**: {snapshot_data.get('Company', '')}",
-                f"**Position**: {snapshot_data.get('Position', '')}",
-                f"**LinkedIn**: {snapshot_data.get('URL', '')}",
-                f"**Connected On**: {snapshot_data.get('Connected On', '')}",
-            ]
-            
-            content = "\n".join(lines)
-            
-            chunks.extend(chunk_text(
-                text=content,
-                domain="my_network",
-                max_tokens=INGEST.get("default_max_tokens", 400),
-                overlap=INGEST.get("default_overlap", 50),
-                metadata={
-                    "type": "connection_profile",
-                    "source": "CONNECTIONS",
-                    "entity_name": f"{snapshot_data.get('First Name', '')} {snapshot_data.get('Last Name', '')}",
-                }
-            ))
-    
-    # Then, add enriched Tavily MDs if they exist
+
+    # Add enriched Tavily MDs if they exist.
     enriched_dir = ENRICHED_DIR / "connections"
     if enriched_dir.exists():
         for md_file in enriched_dir.glob("*.md"):
@@ -249,8 +229,8 @@ def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentC
             chunks.extend(chunk_text(
                 text=content,
                 domain="my_network",
-                max_tokens=INGEST.get("tavily_max_tokens", 500),
-                overlap=INGEST.get("tavily_overlap", 50),
+                max_tokens=CHUNK["tavily_max_tokens"],
+                overlap=CHUNK["tavily_overlap"],
                 metadata={
                     "type": "connection_profile",
                     "source": "CONNECTIONS_TAVILY",
@@ -262,32 +242,15 @@ def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentC
 
 
 def parse_companies_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
-    """Parse COMPANY_FOLLOWS snapshot (enriched with Tavily MDs)."""
+    """Parse COMPANY_FOLLOWS using enriched Tavily markdown only.
+
+    The snapshot rows are intentionally not chunked to avoid duplicate company
+    profiles across legacy/base sources. COMPANY data in Chroma should come
+    from COMPANY_FOLLOWS_TAVILY markdown files under data/enriched/companies.
+    """
     chunks = []
-    
-    # First, add basic company data
-    for elem in elements:
-        for snapshot_data in elem.get("snapshotData", []):
-            lines = [
-                f"# {snapshot_data.get('Organization', '')}",
-                f"**Followed On**: {snapshot_data.get('Followed On', '')}",
-            ]
-            
-            content = "\n".join(lines)
-            
-            chunks.extend(chunk_text(
-                text=content,
-                domain="companies",
-                max_tokens=INGEST.get("default_max_tokens", 400),
-                overlap=INGEST.get("default_overlap", 50),
-                metadata={
-                    "type": "company_profile",
-                    "source": "COMPANY_FOLLOWS",
-                    "entity_name": snapshot_data.get('Organization', ''),
-                }
-            ))
-    
-    # Then, add enriched Tavily MDs if they exist
+
+    # Add enriched Tavily MDs if they exist.
     enriched_dir = ENRICHED_DIR / "companies"
     if enriched_dir.exists():
         for md_file in enriched_dir.glob("*.md"):
@@ -297,8 +260,8 @@ def parse_companies_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
             chunks.extend(chunk_text(
                 text=content,
                 domain="companies",
-                max_tokens=INGEST.get("tavily_max_tokens", 500),
-                overlap=INGEST.get("tavily_overlap", 50),
+                max_tokens=CHUNK["tavily_max_tokens"],
+                overlap=CHUNK["tavily_overlap"],
                 metadata={
                     "type": "company_profile",
                     "source": "COMPANY_FOLLOWS_TAVILY",
@@ -340,8 +303,8 @@ def parse_jobs_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
             chunks.extend(chunk_text(
                 text=content,
                 domain="jobs",
-                max_tokens=INGEST.get("default_max_tokens", 400),
-                overlap=INGEST.get("default_overlap", 50),
+                max_tokens=CHUNK["default_max_tokens"],
+                overlap=CHUNK["default_overlap"],
                 metadata={
                     "type": "job_application" if "Applied Date" in snapshot_data else ("saved_job_alert" if not snapshot_data.get("Company") else "saved_job"),
                     "source": source,
@@ -375,7 +338,7 @@ def parse_education_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
         chunks.extend(chunk_text(
             text=content,
             domain="my_profile",
-            max_tokens=INGEST.get("profile_max_tokens", 400),
+            max_tokens=CHUNK["profile_max_tokens"],
             overlap=0,
             metadata={
                 "type": "education",
@@ -399,7 +362,7 @@ def parse_skills_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]
     chunks.extend(chunk_text(
         text=content,
         domain="my_profile",
-        max_tokens=INGEST.get("profile_max_tokens", 400),
+        max_tokens=CHUNK["profile_max_tokens"],
         overlap=0,
         metadata={
             "type": "skill",
@@ -432,7 +395,7 @@ def parse_certifications_snapshot(elements: List[Dict[str, Any]]) -> List[Docume
         chunks.extend(chunk_text(
             text=content,
             domain="my_profile",
-            max_tokens=INGEST.get("profile_max_tokens", 400),
+            max_tokens=CHUNK["profile_max_tokens"],
             overlap=0,
             metadata={
                 "type": "certification",
@@ -456,7 +419,7 @@ def parse_languages_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
     chunks.extend(chunk_text(
         text=content,
         domain="my_profile",
-        max_tokens=INGEST.get("profile_max_tokens", 400),
+        max_tokens=CHUNK["profile_max_tokens"],
         overlap=0,
         metadata={
             "type": "language",
@@ -488,7 +451,7 @@ def parse_publications_snapshot(elements: List[Dict[str, Any]]) -> List[Document
         chunks.extend(chunk_text(
             text=content,
             domain="my_profile",
-            max_tokens=INGEST.get("profile_max_tokens", 400),
+            max_tokens=CHUNK["profile_max_tokens"],
             overlap=0,
             metadata={
                 "type": "publication",
@@ -522,8 +485,8 @@ def parse_inbox_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
         chunks.extend(chunk_text(
             text=content,
             domain="communications",
-            max_tokens=INGEST.get("messages_max_tokens", 300),
-            overlap=INGEST.get("messages_overlap", 100),
+            max_tokens=CHUNK["messages_max_tokens"],
+            overlap=CHUNK["messages_overlap"],
             metadata={
                 "type": "message_thread",
                 "source": "INBOX",
@@ -552,7 +515,7 @@ def parse_job_saved_answers_snapshot(elements: List[Dict[str, Any]]) -> List[Doc
         chunks.extend(chunk_text(
             text=content,
             domain="my_activity",
-            max_tokens=INGEST.get("default_max_tokens", 400),
+            max_tokens=CHUNK["default_max_tokens"],
             overlap=0,
             metadata={
                 "type": "saved_answer",
