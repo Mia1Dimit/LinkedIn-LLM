@@ -328,9 +328,9 @@ def enrich_companies(companies: list[dict], api_key: str, max_calls: int) -> Non
         print(f"  Query: {query}")
         try:
             result = tavily_search(api_key, query)
-            save_markdown(output_path(company), build_markdown(company, result))
-            credits_used += result.get("usage", {}).get("credits", 0)
             calls_made += 1
+            credits_used += int((result.get("usage") or {}).get("credits", 0) or 0)
+            save_markdown(output_path(company), build_markdown(company, result))
             print(f"  [OK] Saved -> {output_path(company).name}")
         except Exception as exc:
             print(f"  [ERR] Failed: {exc}")
