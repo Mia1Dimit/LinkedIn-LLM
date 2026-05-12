@@ -3,201 +3,145 @@
 Personal RAG-powered career intelligence built on your LinkedIn data.
 Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and LLM.
 
-## Stack
-- **Vector DB**: ChromaDB (local, no server needed)
-- **Embeddings**: AWS Bedrock — Amazon Titan Embed v2 or Cohere Embed Multilingual
-- **LLM**: AWS Bedrock — Claude 3 Sonnet
-- **Data**: Member Data Portability API + LinkedIn ZIP export + Tavily enrichment MDs
+## Current Status (May 12, 2026)
+
+**Phase 2b Complete** ✅
+- LinkedIn Portability Snapshot API integration ready
+- 699 companies in network; 21 new ones enriched (May 10)
+- 627 connections in network; all 3 recent ones enriched (May 4)
+- Ready for ChromaDB ingestion
+
+**Next:** `python ingest.py` to index enriched data into vector store.
 
 ---
 
-## Setup
+## Tech Stack
 
-### 1. Install dependencies
+- **Vector DB**: ChromaDB (local, no server)
+- **Embeddings**: AWS Bedrock — Amazon Titan Embed v2
+- **LLM**: AWS Bedrock — Claude 3.5 Haiku
+- **Data Sources**: LinkedIn Portability API + Tavily Search enrichment
+- **Cost Control**: Content-hash deduplication + date-based incremental enrichment
+
+---
+
+## Quick Start
+
+### Setup
+
+## Quick Start
+
+### Setup
+
 ```bash
 pip install -r requirements.txt
+export LINKEDIN_PORTABILITY_TOKEN="YOUR_TOKEN"
+export TAVILY_API_KEY="YOUR_KEY"
+aws configure  # AWS Bedrock access
 ```
 
-### 2. Configure AWS credentials
+### Full Ingestion Pipeline
+
 ```bash
-aws configure
-# Enter your AWS Access Key, Secret, and region (e.g. eu-west-1)
-```
-
-Make sure your IAM user has `bedrock:InvokeModel` permission for:
-- `amazon.titan-embed-text-v2:0`
-- `anthropic.claude-3-sonnet-20240229-v1:0`
-
-### 3. Set your name & LinkedIn API token
-```bash
-export LINKEDIN_OWNER_NAME="Dimitris"
-export LINKEDIN_PORTABILITY_TOKEN="YOUR_PORTABILITY_TOKEN_HERE"
-```
-
-### 4. Verify cached API snapshots
-Place any pre-fetched LinkedIn Portability Snapshot API responses in `data/api_snapshots/<DOMAIN>/` (optional).
-The ingestion pipeline will fetch missing domains on first run.
-
----
-
-## Usage
-
-### Phase 1: Dry run (no Bedrock calls, just parsing)
-```bash
-python ingest.py --dry-run
-```
-Use this first to verify all CSVs parse correctly before spending Bedrock credits.
-
-### Ingest everything
-```bash
+# Fetch snapshots → Enrich via Tavily → Parse → Index in ChromaDB
 python ingest.py
 ```
 
-### Ingest one section at a time
+### Incremental Updates
+
+Subsequent runs automatically skip already-enriched companies and connections:
+
 ```bash
-python ingest.py --only profile
-python ingest.py --only network
-python ingest.py --only companies
-python ingest.py --only activity
-python ingest.py --only messages
+# Uses enrichment_config.json to only process new follows/connections
+python ingest.py --ingest-only
 ```
 
-### Check what's in ChromaDB
+---
+
+## Development & Monitoring
+
+### Check Pipeline Status
 ```bash
-python ingest.py --stats
+python ingest.py --stats          # ChromaDB statistics
+python enrichment/enrich_companies_api.py --stats
+python enrichment/enrich_connections_api.py --stats
 ```
 
-### Ask a question
+### Dry Run (No Bedrock charges)
 ```bash
-python query/ask.py "Who do I know at AWS?"
-python query/ask.py "What roles have I applied for in the last year?"
-python query/ask.py "Which companies in my network are in fintech?"
-python query/ask.py "Summarise my career trajectory"
-python query/ask.py "What skills do I have that match a senior PM role?"
+python ingest.py --dry-run
 ```
 
-### Interactive mode
+### Individual Pipeline Stages
 ```bash
-python query/ask.py --interactive
+python ingest.py --fetch-only     # Snapshots only
+python ingest.py --enrich-only    # Tavily enrichment only
+python ingest.py --ingest-only    # Parse + embed only
 ```
 
-### Debug: see what context was retrieved
-```bash
-python query/ask.py "Who do I know at Google?" --verbose
-```
+---
+
+## Architecture & Implementation Details
+
+For technical documentation, design decisions, and data flow diagrams, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+Historical documentation, audit reports, and execution guides are archived in **[docs/](docs/)**.
+
+---
+
+## Key Features
+
+✅ **Incremental Enrichment** — Only enrich new companies/connections, skip old ones  
+✅ **Cost Optimized** — Skip chunks with identical content (Bedrock charges avoided)  
+✅ **Privacy** — All data stays on your machine; no cloud storage  
+✅ **Self-Updating** — Config tracks last enrichment date for next run  
+✅ **Quality Gating** — Skip problematic companies (outdated, generic names)  
 
 ---
 
 ## Project Structure
 
 ```
-linkedin_assistant/
-├── config.py                   # All paths, model IDs, collection names
-├── ingest.py                   # Main ingestion orchestrator
-├── requirements.txt
-├── data/
-│   ├── csv/                    # LinkedIn ZIP CSVs
-│   └── tavily/
-│       ├── companies/          # Tavily extract MDs
-│       └── connections/        # Tavily search MDs
-├── chroma_db/                  # ChromaDB persistent storage (auto-created)
-├── parsers/
-│   ├── parse_profile.py        # Profile, positions, education, skills, certs, langs, pubs
-│   ├── parse_network.py        # Connections CSV + Tavily connection MDs
-│   ├── parse_companies.py      # Company follows CSV + Tavily company MDs
-│   ├── parse_activity.py       # Job applications, saved jobs, likes, saved answers
-│   └── parse_messages.py       # Full message threads
+├── ingest.py                      # Main ingestion orchestrator
+├── config.py                      # Global configuration
+├── enrichment/
+│   ├── enrich_companies_api.py   # Company enrichment via Tavily
+│   ├── enrich_connections_api.py # Connection enrichment via Tavily
+│   ├── skip_list.py              # Companies to skip (quality issues)
+│   └── enrichment_config.json    # Tracks enrichment progress
 ├── db/
-│   └── vector_store.py         # ChromaDB + Bedrock embedder
-├── query/
-│   └── ask.py                  # RAG retriever + Bedrock Claude
-└── utils/
-    ├── schema.py               # Unified DocumentChunk schema
-    └── chunker.py              # Text splitter
+│   └── vector_store.py           # ChromaDB interface + Bedrock
+├── utils/
+│   ├── chunker.py                # Text segmentation
+│   └── schema.py                 # DocumentChunk definition
+├── data/
+│   ├── api_snapshots/            # Cached LinkedIn snapshots
+│   └── enriched/                 # Tavily enrichment markdown
+├── chroma_db/                    # ChromaDB vector store (local)
+└── docs/                         # Historical documentation
 ```
 
 ---
 
-## 📋 Migration: Phase 1 → Phase 2
+## Query System (Future)
 
-**Phase 1 (CSV-based)** is now archived in [Phase 1/](Phase 1/) for reference.
-
-**Phase 2 (API-based)** is the current implementation:
-- ✅ Eliminates CSV dependency — data source is LinkedIn Portability Snapshot API
-- ✅ Enables automated periodic updates (future: changelog polling)
-- ✅ Same parsing & ingestion logic, adapted for API JSON format
-- ✅ New unified `ingest.py` orchestrates fetch → enrich → parse → embed → store
-
-See [Phase 1/README.md](Phase 1/README.md) for legacy documentation.
+For now, data is indexed in ChromaDB. Query interface (`query/ask.py`) coming soon.
 
 ---
 
-## Phase 2 — LinkedIn Portability Snapshot API
+## Troubleshooting
 
-Replace CSV imports with live API-sourced data. Three core workflows:
+**Issue**: "Cannot find cached snapshots"  
+→ Run `python ingest.py --fetch-only` first to get snapshots from API
 
-### Phase 2a: Snapshot API Fetcher
+**Issue**: "Tavily API quota exceeded"  
+→ Check `enrichment_config.json` for progress; resume with `python ingest.py --ingest-only`
 
-**Goal**: Fetch all configured domains from LinkedIn Portability Snapshot API as JSON, cache locally.
+**Issue**: "AWS Bedrock permission denied"  
+→ Verify IAM user has `bedrock:InvokeModel` for `amazon.titan-embed-text-v2:0`
 
-**Domains** (14 total):
-- **Direct Ingestion** (9) → parsed directly to chunks & ChromaDB
-  - `PROFILE`, `POSITIONS`, `EDUCATION`, `SKILLS`, `CERTIFICATIONS`, `LANGUAGES`, `PUBLICATIONS`, `JOB_APPLICANT_SAVED_ANSWERS`, `INBOX`
+For more details, see **[ARCHITECTURE.md](ARCHITECTURE.md)** or check archived docs in **[docs/](docs/)**.
 
-- **Tavily Enrichment** (2) → search public data, enrich, then ingest
-  - `CONNECTIONS` — Tavily Search API with `"<Full Name>" <Company> <Position>` (exact match)
-    - Extract: professional summary, experience, education, certifications
-  - `COMPANY_FOLLOWS` — Tavily Search API with `<Company Name> industry founding funding` (structured query)
-    - Extract: company info, industry, recent activity, founding date, size
-
-- **Activity** (3) → direct ingestion
-  - `JOB_APPLICATIONS`, `SAVED_JOBS`, `SAVED_JOB_ALERTS`
-
-**Note**: INBOX is ingested directly without enrichment (conversation content is already self-contained).
-
-**Script**: `ingestion/snapshot_api.py`
-```bash
-# Fetch all domains (requires LINKEDIN_PORTABILITY_TOKEN env var)
-python ingestion/snapshot_api.py --fetch-all
-
-# Fetch specific domains only
-python ingestion/snapshot_api.py --domains PROFILE CONNECTIONS SAVED_JOBS
-
-# Dry-run (validate token, show quota usage)
-python ingestion/snapshot_api.py --validate
-
-# Resume interrupted fetch (skips already-cached domains)
-python ingestion/snapshot_api.py --resume
-```
-
-**Caching Strategy**:
-- Cache folder: `data/api_snapshots/<domain>/<timestamp>.json`
-- Resume logic: skip already-cached domains (respects API rate limits)
-- Quota tracking: log API credits/requests per domain
-
-### Phase 2b: Tavily Enrichment Scripts
-
-**For Domains Requiring Enrichment** (CONNECTIONS, COMPANY_FOLLOWS only):
-
-#### `enrichment/enrich_connections_api.py`
-- **Input**: `data/api_snapshots/CONNECTIONS/<timestamp>.json`
-- **Process**: For each connection (First Name, Last Name, URL, Company, Position):
-  1. Query Tavily Search API with: `"<Full Name>" <Company> <Position>` (exact match)
-  2. Extract professional summary, experience, education, certifications
-- **Output**: Markdown file per connection → `data/enriched/connections/<slug>.md`
-- **Resume**: Skip already-enriched connections (by checking file existence)
-
-#### `enrichment/enrich_companies_api.py`
-- **Input**: `data/api_snapshots/COMPANY_FOLLOWS/<timestamp>.json`
-- **Process**: For each company (Organization name):
-  1. Query Tavily Search API with: `<Company Name> industry founding funding careers` (structured search)
-  2. Extract company page, industry, founding info, size, recent activity
-- **Output**: Markdown file per company → `data/enriched/companies/<slug>.md`
-- **Resume**: Skip already-enriched companies
-
-**Note**: INBOX and other domains are ingested directly without enrichment.
-
-### Phase 2c: Integrated Ingestion Pipeline
 
 New unified `ingest.py` supports Phase 2 workflows only (CSV import deprecated):
 
