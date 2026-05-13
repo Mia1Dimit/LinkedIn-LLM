@@ -10,6 +10,9 @@ data/
 creds/
 *.json
 !docs/*.json
+!frontend/package.json
+!frontend/package-lock.json
+!evaluation/*.json
 
 # Environment variables and secrets
 .env
