@@ -3,15 +3,15 @@
 Personal RAG-powered career intelligence built on your LinkedIn data.
 Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and LLM.
 
-## Current Status (May 12, 2026)
+## Current Status (May 13, 2026)
 
-**Phase 2b Complete** ✅
-- LinkedIn Portability Snapshot API integration ready
-- 699 companies in network; 21 new ones enriched (May 10)
-- 627 connections in network; all 3 recent ones enriched (May 4)
-- Ready for ChromaDB ingestion
+**Phase 2c Complete** ✅
+- LinkedIn Snapshot API flow is stable end-to-end
+- Parsing and ingestion are validated (10,276 chunks indexed)
+- ChromaDB collections are healthy and query-ready
+- Modular sync runner is in place for repeatable updates
 
-**Next:** `python ingest.py` to index enriched data into vector store.
+**Current focus:** Phase 3 productization (chat UX, freshness, and automation).
 
 ---
 
@@ -22,6 +22,28 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - **LLM**: AWS Bedrock — Claude 3.5 Haiku
 - **Data Sources**: LinkedIn Portability API + Tavily Search enrichment
 - **Cost Control**: Content-hash deduplication + date-based incremental enrichment
+
+---
+
+## Delivery Phases
+
+### Phase 1 - Foundations
+
+- CSV preparation from LinkedIn export
+- ChromaDB initialization
+- Tavily experimentation focused on enrichment quality
+
+### Phase 2 - Snapshot API Pipeline
+
+- **Phase 2a**: Snapshot API ingestion and local caching
+- **Phase 2b**: Enrichment pipeline for companies/connections
+- **Phase 2c**: Parsing + embedding + ChromaDB ingestion hardening
+
+### Phase 3 - Productization (Now)
+
+- Frontend chat UI with conversation history and internet-enabled answering
+- Freshness layer using changelog polling + targeted incremental ingest
+- CI/CD and scheduler automation so updates run without manual intervention
 
 ---
 
@@ -61,6 +83,21 @@ python ingest.py --ingest-only
 python ingest.py --stats          # ChromaDB statistics
 python enrichment/enrich_companies_api.py --stats
 python enrichment/enrich_connections_api.py --stats
+python evaluation/run_retrieval_eval.py
+```
+
+### Retrieval Quality Evaluation
+
+Run the retrieval-only evaluation suite (20 real-world queries) to track quality after parser/chunker/query changes:
+
+```bash
+python evaluation/run_retrieval_eval.py
+```
+
+Custom run:
+
+```bash
+python evaluation/run_retrieval_eval.py --top-k 10 --output evaluation/reports/retrieval_eval_custom.json
 ```
 
 ### Dry Run (No Bedrock charges)
@@ -92,6 +129,8 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Privacy** — All data stays on your machine; no cloud storage  
 ✅ **Self-Updating** — Config tracks last enrichment date for next run  
 ✅ **Quality Gating** — Skip problematic companies (outdated, generic names)  
+✅ **Retrieval Quality Suite** — 20-query harness for measuring noise and relevance  
+✅ **Intent-Aware Retrieval** — Query plans use source/type filters + reranking  
 
 ---
 
@@ -119,9 +158,46 @@ Historical documentation, audit reports, and execution guides are archived in **
 
 ---
 
-## Query System (Future)
+## Query System
 
-For now, data is indexed in ChromaDB. Query interface (`query/ask.py`) coming soon.
+The local query system is running and uses indexed LinkedIn data from ChromaDB.
+
+Next step is to wrap it with a frontend chat application that supports:
+1. Persistent conversation history
+2. Better user controls (filters, source citations, controls per collection)
+3. Optional internet retrieval for up-to-date context
+
+---
+
+## Next Steps Roadmap
+
+### 1) Frontend Chat Application
+
+- Build a lightweight web app (FastAPI + React or Streamlit)
+- Add chat history persistence (SQLite/Postgres)
+- Show retrieved chunks and citations per answer
+- Add source toggles (LinkedIn-only vs LinkedIn + web)
+
+### 2) Changelog API for Data Freshness
+
+- Poll `memberChangeLogs` daily or weekly
+- Ingest only new events (messages, invitations, social actions)
+- Keep checkpoint state (last `capturedAt`) for incremental runs
+- Continue using snapshot exports as source-of-truth for areas where changelog is sparse (for example, company follows)
+
+### 3) Automation Without Manual Runs
+
+- **Local option:** scheduled PowerShell task runs `sync_all_data.ps1`
+- **Cloud option:** GitHub Actions on cron for fetch/ingest jobs
+- Add notifications (email/Slack) on failures
+- Add lightweight health checks and run summaries
+
+### 4) Make the Product More Intriguing
+
+- Daily brief generated from new events (new conversations, notable interactions)
+- Personal CRM lens (follow-ups, relationship momentum, opportunity signals)
+- Career intelligence dashboard (skills growth, inbound trends, company movement)
+- Weekly "what changed" digest from changelog deltas
 
 ---
 
