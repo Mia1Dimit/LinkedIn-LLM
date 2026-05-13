@@ -39,7 +39,6 @@ import argparse
 import subprocess
 import json
 import hashlib
-import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -52,7 +51,6 @@ from config import PORTABILITY_API, INGEST, COLLECTIONS, CHUNK
 from db.vector_store import VectorStore
 from utils.schema import DocumentChunk
 from utils.chunker import chunk_text
-from utils.text_quality import clean_tavily_markdown, score_text_quality
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -68,58 +66,6 @@ DOMAINS = {
     "enriched": ["CONNECTIONS", "COMPANY_FOLLOWS"],
     "activity": ["JOB_APPLICATIONS", "SAVED_JOBS", "SAVED_JOB_ALERTS"],
 }
-
-
-def _log_observability(message: str):
-    if INGEST.get("observability", False):
-        print(f"    [obs] {message}")
-
-
-def _dedupe_and_filter_chunks(chunks: List[DocumentChunk]) -> tuple[List[DocumentChunk], dict]:
-    """Apply chunk quality gates and dedupe before embedding/upsert."""
-    stats = {
-        "input": len(chunks),
-        "kept": 0,
-        "dropped_short": 0,
-        "dropped_noise": 0,
-        "dropped_quality": 0,
-        "dropped_duplicate": 0,
-    }
-    deduped: List[DocumentChunk] = []
-    seen_keys: set[str] = set()
-
-    for chunk in chunks:
-        text = chunk.document.strip()
-        if len(text) < INGEST["min_chunk_chars"]:
-            stats["dropped_short"] += 1
-            continue
-
-        quality = score_text_quality(text)
-        if quality.noise_hits > INGEST["max_noise_hits"]:
-            stats["dropped_noise"] += 1
-            continue
-        if quality.score < INGEST["min_quality_score"]:
-            stats["dropped_quality"] += 1
-            continue
-
-        normalized = re.sub(r"\s+", " ", text.lower()).strip()
-        normalized_hash = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
-        dedupe_key = "::".join([
-            chunk.collection,
-            chunk.source,
-            chunk.type,
-            chunk.entity_id,
-            normalized_hash,
-        ])
-        if dedupe_key in seen_keys:
-            stats["dropped_duplicate"] += 1
-            continue
-
-        seen_keys.add(dedupe_key)
-        deduped.append(chunk)
-
-    stats["kept"] = len(deduped)
-    return deduped, stats
 
 
 # ── Snapshot API Integration ──────────────────────────────────────────────────
@@ -282,18 +228,12 @@ def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentC
         for md_file in enriched_dir.glob("*.md"):
             with open(md_file, "r", encoding="utf-8") as f:
                 content = f.read()
-
-            cleaned, cleaning_stats = clean_tavily_markdown(content)
-            _log_observability(
-                f"connections clean {md_file.name}: chars {cleaning_stats.original_chars} -> {cleaning_stats.cleaned_chars}, "
-                f"removed_lines={cleaning_stats.removed_lines}, noise_hits={cleaning_stats.removed_noise_hits}"
-            )
             
             chunks.extend(chunk_text(
-                text=cleaned,
+                text=content,
                 domain="my_network",
-                max_tokens=CHUNK["tavily_connections_max_tokens"],
-                overlap=CHUNK["tavily_connections_overlap"],
+                max_tokens=CHUNK["tavily_max_tokens"],
+                overlap=CHUNK["tavily_overlap"],
                 metadata={
                     "type": "connection_profile",
                     "source": "CONNECTIONS_TAVILY",
@@ -319,18 +259,12 @@ def parse_companies_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
         for md_file in enriched_dir.glob("*.md"):
             with open(md_file, "r", encoding="utf-8") as f:
                 content = f.read()
-
-            cleaned, cleaning_stats = clean_tavily_markdown(content)
-            _log_observability(
-                f"companies clean {md_file.name}: chars {cleaning_stats.original_chars} -> {cleaning_stats.cleaned_chars}, "
-                f"removed_lines={cleaning_stats.removed_lines}, noise_hits={cleaning_stats.removed_noise_hits}"
-            )
             
             chunks.extend(chunk_text(
-                text=cleaned,
+                text=content,
                 domain="companies",
-                max_tokens=CHUNK["tavily_companies_max_tokens"],
-                overlap=CHUNK["tavily_companies_overlap"],
+                max_tokens=CHUNK["tavily_max_tokens"],
+                overlap=CHUNK["tavily_overlap"],
                 metadata={
                     "type": "company_profile",
                     "source": "COMPANY_FOLLOWS_TAVILY",
@@ -743,22 +677,13 @@ def ingest_chunks(all_chunks: Dict[str, List[DocumentChunk]], dry_run: bool = Fa
         else:
             continue
         
-        filtered_chunks, filter_stats = _dedupe_and_filter_chunks(chunks)
-        print(
-            f"  [{domain} -> {collection}] Ingesting {len(filtered_chunks)}/{len(chunks)} chunks "
-            f"(dropped: short={filter_stats['dropped_short']}, noise={filter_stats['dropped_noise']}, "
-            f"quality={filter_stats['dropped_quality']}, dup={filter_stats['dropped_duplicate']})..."
-        )
-        _log_observability(
-            f"{domain} quality stats: kept={filter_stats['kept']} of {filter_stats['input']}"
-        )
-
-        stats = store.upsert(filtered_chunks)
+        print(f"  [{domain} → {collection}] Ingesting {len(chunks)} chunks...")
+        stats = store.upsert(chunks)
         if stats["errors"]:
             raise RuntimeError(
                 f"Upsert failed for {domain} → {collection}: {stats['errors']} chunk(s) failed"
             )
-        total_ingested += len(filtered_chunks)
+        total_ingested += len(chunks)
     
     print(f"\n  [OK] Ingested {total_ingested} total chunks")
 

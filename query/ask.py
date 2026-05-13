@@ -13,10 +13,8 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 import sys
-import logging
 from typing import Any
 from pathlib import Path
 
@@ -28,10 +26,6 @@ if str(REPO_ROOT) not in sys.path:
 import boto3
 from db.vector_store import VectorStore
 from config import BEDROCK_MODELS, AWS_REGION, INGEST
-
-logger = logging.getLogger("query.ask")
-if not logger.handlers:
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 # ─────────────────────────────────────────────
 # System prompt
@@ -61,42 +55,6 @@ NOISY_DOCUMENT_MARKERS = [
     "new to linkedin",
     "by clicking continue",
 ]
-
-OBSERVABILITY_ENABLED = os.getenv("QUERY_OBSERVABILITY", "0") == "1"
-
-
-INTENT_PLANS = {
-    "count_metrics": {
-        "collections": ["companies", "my_network", "communications", "jobs", "my_activity", "my_profile"],
-        "allowed_sources": {"COMPANY_FOLLOWS", "COMPANY_FOLLOWS_TAVILY", "CONNECTIONS", "CONNECTIONS_TAVILY", "INBOX"},
-        "blocked_types": {"saved_answer"},
-        "n_results": 6,
-    },
-    "network_summary": {
-        "collections": ["communications", "my_activity", "my_network", "companies"],
-        "allowed_sources": {"INBOX", "CONNECTIONS_TAVILY", "COMPANY_FOLLOWS_TAVILY", "CONNECTIONS", "COMPANY_FOLLOWS"},
-        "blocked_types": {"saved_answer", "job_application", "saved_job", "saved_job_alert"},
-        "n_results": 10,
-    },
-    "messaging": {
-        "collections": ["communications", "my_activity", "my_network"],
-        "allowed_sources": {"INBOX", "CONNECTIONS_TAVILY"},
-        "blocked_types": {"saved_job", "saved_job_alert"},
-        "n_results": 10,
-    },
-    "career_profile": {
-        "collections": ["my_profile", "jobs", "my_activity"],
-        "allowed_sources": {"PROFILE", "POSITIONS", "EDUCATION", "SKILLS", "CERTIFICATIONS", "LANGUAGES", "PUBLICATIONS", "JOB_APPLICATIONS", "SAVED_JOBS"},
-        "blocked_types": set(),
-        "n_results": 8,
-    },
-    "general": {
-        "collections": None,
-        "allowed_sources": None,
-        "blocked_types": set(),
-        "n_results": 8,
-    },
-}
 
 # ─────────────────────────────────────────────
 # Bedrock LLM client
@@ -170,19 +128,6 @@ def _route_query(query: str) -> list[str]:
     return None   # None → query all collections
 
 
-def _classify_intent(query: str) -> str:
-    q = query.lower()
-    if any(token in q for token in ["how many", "count", "number of", "total"]):
-        return "count_metrics"
-    if any(token in q for token in ["networking", "relationship", "network summary", "network activity"]):
-        return "network_summary"
-    if any(token in q for token in ["message", "conversation", "inbox", "dm", "talked", "spoke"]):
-        return "messaging"
-    if any(token in q for token in ["career", "trajectory", "skills", "experience", "education", "profile"]):
-        return "career_profile"
-    return "general"
-
-
 def _clean_document(document: str, max_chars: int = 900) -> str:
     lines = []
     for raw_line in document.splitlines():
@@ -251,46 +196,9 @@ def _score_hit(query: str, hit: dict[str, Any], target_collections: list[str] | 
     return score
 
 
-def _apply_intent_filters(hits: list[dict[str, Any]], intent: str) -> list[dict[str, Any]]:
-    plan = INTENT_PLANS.get(intent, INTENT_PLANS["general"])
-    allowed_sources = plan.get("allowed_sources")
-    blocked_types = plan.get("blocked_types", set())
-
-    filtered_hits = []
-    for hit in hits:
-        metadata = hit.get("metadata", {})
-        source = metadata.get("source", "")
-        hit_type = metadata.get("type", "")
-
-        if allowed_sources and source not in allowed_sources:
-            continue
-        if hit_type in blocked_types:
-            continue
-        filtered_hits.append(hit)
-    return filtered_hits
-
-
-def _rerank_hits(query: str, hits: list[dict[str, Any]], target_collections: list[str] | None, intent: str) -> list[dict[str, Any]]:
-    reranked = sorted(hits, key=lambda hit: _score_hit(query, hit, target_collections), reverse=True)
-
-    # Late-boost recency in messaging/network summaries.
-    if intent in {"network_summary", "messaging"}:
-        reranked.sort(
-            key=lambda hit: (
-                bool(re.search(r"2026|2025", hit.get("document", ""))),
-                _score_hit(query, hit, target_collections),
-            ),
-            reverse=True,
-        )
-    return reranked
-
-
 def retrieve_hits(store: VectorStore, query: str, n_results: int = 8) -> list[dict[str, Any]]:
     """Retrieve and merge relevant hits for a query."""
-    intent = _classify_intent(query)
-    plan = INTENT_PLANS.get(intent, INTENT_PLANS["general"])
-    target_collections = plan["collections"] or _route_query(query)
-    n_results = max(n_results, int(plan.get("n_results", n_results)))
+    target_collections = _route_query(query)
 
     if target_collections:
         hits = []
@@ -310,22 +218,7 @@ def retrieve_hits(store: VectorStore, query: str, n_results: int = 8) -> list[di
     else:
         hits = store.query_all_collections(query, n_per_collection=3)
 
-    hits = _apply_intent_filters(hits, intent)
-    hits = _rerank_hits(query, hits, target_collections, intent)
-
-    if OBSERVABILITY_ENABLED:
-        top_sources = [
-            f"{h.get('collection', '?')}:{h.get('metadata', {}).get('source', '?')}:{h.get('metadata', {}).get('type', '?')}"
-            for h in hits[:6]
-        ]
-        logger.info(
-            "query='%s' intent=%s target=%s candidates=%d top=%s",
-            query,
-            intent,
-            target_collections,
-            len(hits),
-            " | ".join(top_sources),
-        )
+    hits.sort(key=lambda hit: _score_hit(query, hit, target_collections), reverse=True)
 
     deduped_hits = []
     seen_keys = set()

@@ -10,9 +10,6 @@ data/
 creds/
 *.json
 !docs/*.json
-!frontend/package.json
-!frontend/package-lock.json
-!evaluation/*.json
 
 # Environment variables and secrets
 .env
@@ -142,14 +139,6 @@ tavily_scripts/*.md
 # ChromaDB - Vector Store Data
 # ==========================================
 chroma_db/
-
-
-# Frontend dependencies/build artifacts
-frontend/node_modules/
-frontend/dist/
-
-# Evaluation outputs
-evaluation/reports/
 
 
 Phase 1/tavily_scripts/Connections/

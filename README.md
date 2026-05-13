@@ -83,21 +83,6 @@ python ingest.py --ingest-only
 python ingest.py --stats          # ChromaDB statistics
 python enrichment/enrich_companies_api.py --stats
 python enrichment/enrich_connections_api.py --stats
-python evaluation/run_retrieval_eval.py
-```
-
-### Retrieval Quality Evaluation
-
-Run the retrieval-only evaluation suite (20 real-world queries) to track quality after parser/chunker/query changes:
-
-```bash
-python evaluation/run_retrieval_eval.py
-```
-
-Custom run:
-
-```bash
-python evaluation/run_retrieval_eval.py --top-k 10 --output evaluation/reports/retrieval_eval_custom.json
 ```
 
 ### Dry Run (No Bedrock charges)
@@ -129,8 +114,6 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Privacy** — All data stays on your machine; no cloud storage  
 ✅ **Self-Updating** — Config tracks last enrichment date for next run  
 ✅ **Quality Gating** — Skip problematic companies (outdated, generic names)  
-✅ **Retrieval Quality Suite** — 20-query harness for measuring noise and relevance  
-✅ **Intent-Aware Retrieval** — Query plans use source/type filters + reranking  
 
 ---
 

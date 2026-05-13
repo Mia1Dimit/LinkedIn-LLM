@@ -86,10 +86,6 @@ CHUNK = {
     "profile_overlap":      0,      # profile sections are self-contained
     "tavily_max_tokens":    500,    # company posts, connection summaries
     "tavily_overlap":       50,
-    "tavily_connections_max_tokens": 340,
-    "tavily_connections_overlap": 40,
-    "tavily_companies_max_tokens": 460,
-    "tavily_companies_overlap": 55,
     "messages_max_tokens":  300,    # conversation turns
     "messages_overlap":     100,    # preserve conversation context
     "default_max_tokens":   400,
@@ -106,16 +102,8 @@ INGEST = {
     # Bedrock embedding rate limit — requests per minute
     "embedding_rpm": 100,
 
-    # Chunk-level quality gates (applied before embedding)
-    "min_chunk_chars": 80,
-    "min_quality_score": 0.24,
-    "max_noise_hits": 2,
-
     # Your LinkedIn display name (used in system prompt)
     "owner_name": os.getenv("LINKEDIN_OWNER_NAME", "Dimitris"),
-
-    # Set to 1 to print detailed ingest filtering/dedup diagnostics
-    "observability": os.getenv("INGEST_OBSERVABILITY", "0") == "1",
 }
 
 # ─────────────────────────────────────────────
