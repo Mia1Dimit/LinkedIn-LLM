@@ -141,6 +141,14 @@ tavily_scripts/*.md
 chroma_db/
 
 
+# Frontend dependencies/build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Evaluation outputs
+evaluation/reports/
+
+
 Phase 1/tavily_scripts/Connections/
 Phase 1/tavily_scripts/Companies/
 Phase 1/tavily_scripts/*.csv
