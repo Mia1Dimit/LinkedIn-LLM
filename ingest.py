@@ -39,6 +39,7 @@ import argparse
 import subprocess
 import json
 import hashlib
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -222,25 +223,13 @@ def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentC
     """
     chunks = []
 
-    # Add enriched Tavily MDs if they exist.
     enriched_dir = ENRICHED_DIR / "connections"
     if enriched_dir.exists():
         for md_file in enriched_dir.glob("*.md"):
             with open(md_file, "r", encoding="utf-8") as f:
                 content = f.read()
-            
-            chunks.extend(chunk_text(
-                text=content,
-                domain="my_network",
-                max_tokens=CHUNK["tavily_max_tokens"],
-                overlap=CHUNK["tavily_overlap"],
-                metadata={
-                    "type": "connection_profile",
-                    "source": "CONNECTIONS_TAVILY",
-                    "entity_name": md_file.stem,
-                }
-            ))
-    
+            chunks.extend(_build_connection_chunks_from_markdown(md_file, content))
+
     return chunks
 
 
@@ -253,25 +242,227 @@ def parse_companies_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChu
     """
     chunks = []
 
-    # Add enriched Tavily MDs if they exist.
     enriched_dir = ENRICHED_DIR / "companies"
     if enriched_dir.exists():
         for md_file in enriched_dir.glob("*.md"):
             with open(md_file, "r", encoding="utf-8") as f:
                 content = f.read()
-            
-            chunks.extend(chunk_text(
-                text=content,
-                domain="companies",
-                max_tokens=CHUNK["tavily_max_tokens"],
-                overlap=CHUNK["tavily_overlap"],
-                metadata={
-                    "type": "company_profile",
-                    "source": "COMPANY_FOLLOWS_TAVILY",
-                    "entity_name": md_file.stem,
-                }
-            ))
-    
+            chunks.extend(_build_company_chunks_from_markdown(md_file, content))
+
+    return chunks
+
+
+def _clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _extract_md_line_value(content: str, label: str) -> str:
+    patterns = [
+        rf"\*\*{re.escape(label)}\s*:\*\*\s*(.+)",
+        rf"\*\*{re.escape(label)}\*\*\s*:\s*(.+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            return _clean_text(match.group(1))
+    return "N/A"
+
+
+def _extract_md_section(content: str, heading: str) -> str:
+    pattern = rf"^##\s+{re.escape(heading)}\s*$\n(.+?)(?=^##\s+|\Z)"
+    match = re.search(pattern, content, flags=re.MULTILINE | re.DOTALL)
+    if not match:
+        return "N/A"
+    lines = [_clean_text(line) for line in match.group(1).splitlines() if _clean_text(line)]
+    return "\n".join(lines) if lines else "N/A"
+
+
+def _extract_md_bullets(section_text: str) -> list[str]:
+    if section_text == "N/A":
+        return []
+    items: list[str] = []
+    for line in section_text.splitlines():
+        text = _clean_text(line)
+        if not text:
+            continue
+        if text.startswith("- "):
+            text = _clean_text(text[2:])
+        items.append(text)
+    return items
+
+
+def _build_company_chunks_from_markdown(md_file: Path, content: str) -> list[DocumentChunk]:
+    company_name = _extract_md_line_value(content, "Company Name")
+    source_url = _extract_md_line_value(content, "Source URL")
+    extracted_at = _extract_md_line_value(content, "Extracted At")
+    website_url = _extract_md_section(content, "Website URL")
+    industry = _extract_md_section(content, "Industry")
+    company_size = _extract_md_section(content, "Company Size")
+    founded = _extract_md_section(content, "Founded")
+    about = _extract_md_section(content, "About Us/Overview")
+    locations = _extract_md_bullets(_extract_md_section(content, "Locations"))
+    investors = _extract_md_section(content, "Investors")
+    funding = _extract_md_section(content, "Funding")
+    specialties = _extract_md_bullets(_extract_md_section(content, "Specialties"))
+
+    entity_name = company_name if company_name != "N/A" else md_file.stem
+    entity_base = md_file.stem
+    metadata_base = {
+        "source": "COMPANY_FOLLOWS_TAVILY",
+        "entity_name": entity_name,
+        "url": source_url if source_url != "N/A" else "",
+    }
+
+    chunks: list[DocumentChunk] = []
+
+    identity_text = "\n".join(
+        [
+            f"Company Name: {entity_name}",
+            f"Source URL: {source_url}",
+            f"Extracted At: {extracted_at}",
+            f"Website URL: {website_url}",
+            f"Industry: {industry}",
+            f"Company Size: {company_size}",
+            f"Founded: {founded}",
+        ]
+    )
+    chunks.extend(
+        chunk_text(
+            text=identity_text,
+            domain="companies",
+            max_tokens=220,
+            overlap=0,
+            metadata={
+                **metadata_base,
+                "type": "company_identity",
+                "entity_id": f"{entity_base}::identity",
+                "extra": {"section": "identity"},
+            },
+        )
+    )
+
+    chunks.extend(
+        chunk_text(
+            text=f"Company Name: {entity_name}\n\nAbout Us/Overview:\n{about}",
+            domain="companies",
+            max_tokens=320,
+            overlap=30,
+            metadata={
+                **metadata_base,
+                "type": "company_overview",
+                "entity_id": f"{entity_base}::overview",
+                "extra": {"section": "overview"},
+            },
+        )
+    )
+
+    locations_text = "\n".join(locations) if locations else "N/A"
+    chunks.extend(
+        chunk_text(
+            text=f"Company Name: {entity_name}\n\nLocations:\n{locations_text}",
+            domain="companies",
+            max_tokens=220,
+            overlap=0,
+            metadata={
+                **metadata_base,
+                "type": "company_locations",
+                "entity_id": f"{entity_base}::locations",
+                "extra": {"section": "locations"},
+            },
+        )
+    )
+
+    chunks.extend(
+        chunk_text(
+            text=f"Company Name: {entity_name}\n\nInvestors:\n{investors}\n\nFunding:\n{funding}",
+            domain="companies",
+            max_tokens=260,
+            overlap=0,
+            metadata={
+                **metadata_base,
+                "type": "company_finance",
+                "entity_id": f"{entity_base}::finance",
+                "extra": {"section": "finance"},
+            },
+        )
+    )
+
+    specialties_text = "\n".join(specialties) if specialties else "N/A"
+    chunks.extend(
+        chunk_text(
+            text=f"Company Name: {entity_name}\n\nSpecialties:\n{specialties_text}",
+            domain="companies",
+            max_tokens=220,
+            overlap=0,
+            metadata={
+                **metadata_base,
+                "type": "company_specialties",
+                "entity_id": f"{entity_base}::specialties",
+                "extra": {"section": "specialties"},
+            },
+        )
+    )
+
+    return chunks
+
+
+def _build_connection_chunks_from_markdown(md_file: Path, content: str) -> list[DocumentChunk]:
+    name = _extract_md_line_value(content, "Name and Surname")
+    current_company = _extract_md_line_value(content, "Current Company")
+    position = _extract_md_line_value(content, "Position")
+    linkedin_url = _extract_md_line_value(content, "LinkedIn URL")
+    connected_on = _extract_md_line_value(content, "Connected On")
+    summary = _extract_md_section(content, "Professional Summary")
+
+    entity_name = name if name != "N/A" else md_file.stem
+    entity_base = md_file.stem
+    metadata_base = {
+        "source": "CONNECTIONS_TAVILY",
+        "entity_name": entity_name,
+        "url": linkedin_url if linkedin_url != "N/A" else "",
+        "company": current_company if current_company != "N/A" else None,
+    }
+
+    chunks: list[DocumentChunk] = []
+    identity_text = "\n".join(
+        [
+            f"Name and Surname: {entity_name}",
+            f"Current Company: {current_company}",
+            f"Position: {position}",
+            f"LinkedIn URL: {linkedin_url}",
+            f"Connected On: {connected_on}",
+        ]
+    )
+    chunks.extend(
+        chunk_text(
+            text=identity_text,
+            domain="my_network",
+            max_tokens=220,
+            overlap=0,
+            metadata={
+                **metadata_base,
+                "type": "connection_identity",
+                "entity_id": f"{entity_base}::identity",
+                "extra": {"section": "identity"},
+            },
+        )
+    )
+
+    chunks.extend(
+        chunk_text(
+            text=f"Name and Surname: {entity_name}\n\nProfessional Summary:\n{summary}",
+            domain="my_network",
+            max_tokens=320,
+            overlap=30,
+            metadata={
+                **metadata_base,
+                "type": "connection_summary",
+                "entity_id": f"{entity_base}::summary",
+                "extra": {"section": "summary"},
+            },
+        )
+    )
+
     return chunks
 
 

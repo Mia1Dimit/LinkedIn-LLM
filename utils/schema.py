@@ -55,6 +55,13 @@ VALID_TYPES = {
     "connection_profile",
     "company_profile",
     "company_post",
+    "company_identity",
+    "company_overview",
+    "company_locations",
+    "company_finance",
+    "company_specialties",
+    "connection_identity",
+    "connection_summary",
     # Activity
     "job_application",
     "job_application_answer",
