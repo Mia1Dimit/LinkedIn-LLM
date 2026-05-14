@@ -218,9 +218,12 @@ class VectorStore:
         coll = self._get_collection(collection)
         query_embedding = self.embedder.embed_query(query_text)
 
+        # NOTE:
+        # On some Windows setups, Chroma's Rust-backed `count()` can crash the
+        # interpreter with an access violation. Avoid count() on hot query paths.
         kwargs = {
             "query_embeddings": [query_embedding],
-            "n_results": min(n_results, coll.count() or 1),
+            "n_results": max(1, n_results),
             "include": ["documents", "metadatas", "distances"],
         }
         if where:

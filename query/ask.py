@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import boto3
+from botocore.config import Config as BotoConfig
 from db.vector_store import VectorStore
 from config import BEDROCK_MODELS, AWS_REGION, INGEST
 
@@ -61,8 +62,16 @@ NOISY_DOCUMENT_MARKERS = [
 # ─────────────────────────────────────────────
 
 class BedrockLLM:
-    def __init__(self):
-        self.client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+    def __init__(self, connect_timeout: int = 10, read_timeout: int = 120):
+        self.client = boto3.client(
+            "bedrock-runtime",
+            region_name=AWS_REGION,
+            config=BotoConfig(
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+                retries={"max_attempts": 2},
+            ),
+        )
         self.model_id = BEDROCK_MODELS["llm"]
 
     def generate(self, system: str, user: str, max_tokens: int = 1500) -> str:
@@ -161,20 +170,23 @@ def _score_hit(query: str, hit: dict[str, Any], target_collections: list[str] | 
 
     score = -distance
 
+    # ── Collection priority boost ─────────────────────────────────────────────
     if target_collections and collection in target_collections:
         score += 0.2 - (0.02 * target_collections.index(collection))
 
+    # ── Recency signals ───────────────────────────────────────────────────────
     if any(term in q for term in ["recent", "latest", "current", "recently"]):
         if collection in {"communications", "my_activity", "jobs"}:
             score += 0.16
         if re.search(r"2026|2025|2024", lowered):
             score += 0.05
 
+    # ── Network / relationship queries ────────────────────────────────────────
     if any(term in q for term in ["network", "networking", "relationship", "connect"]):
         if collection == "communications":
             score += 0.18
         elif collection == "my_activity":
-            score += 0.1
+            score += 0.10
         elif collection == "my_network":
             score += 0.08
         elif collection == "companies":
@@ -183,10 +195,56 @@ def _score_hit(query: str, hit: dict[str, Any], target_collections: list[str] | 
         if hit_type in {"saved_answer", "job_application", "saved_job", "saved_job_alert"}:
             score -= 0.28
 
+    # ── Message / conversation queries ────────────────────────────────────────
     if any(term in q for term in ["message", "conversation", "talk", "spoke", "dm"]):
         if collection == "communications":
             score += 0.18
 
+    # ── Entity lookup: "who is X", "tell me about X", "summarise X" ───────────
+    is_entity_lookup = any(
+        term in q
+        for term in ["who is", "who are", "tell me about", "summarise", "summarize",
+                     "profile of", "background of", "what do you know about"]
+    )
+    if is_entity_lookup:
+        if hit_type in {"company_identity", "connection_identity"}:
+            score += 0.22
+        elif hit_type in {"company_overview", "connection_summary"}:
+            score += 0.12
+
+    # ── Person-specific queries ───────────────────────────────────────────────
+    is_person_query = any(
+        term in q for term in ["person", "colleague", "who do i know", "who works", "who works at"]
+    )
+    if is_person_query:
+        if hit_type in {"connection_identity", "connection_summary"}:
+            score += 0.15
+        elif hit_type.startswith("company_"):
+            score -= 0.05
+
+    # ── Finance / funding queries ─────────────────────────────────────────────
+    if any(term in q for term in ["fund", "investor", "revenue", "series", "raised",
+                                   "financ", "investment", "capital", "vc"]):
+        if hit_type == "company_finance":
+            score += 0.22
+        elif hit_type == "company_identity":
+            score += 0.08
+
+    # ── Location queries ──────────────────────────────────────────────────────
+    if any(term in q for term in ["where", "locat", "city", "country", "office",
+                                   "headquarter", "based in", "region"]):
+        if hit_type == "company_locations":
+            score += 0.22
+        elif hit_type == "connection_identity":
+            score += 0.10
+
+    # ── "What does X do" / specialties / overview queries ────────────────────
+    if any(term in q for term in ["what do", "what does", "speciali", "product",
+                                   "service", "focus", "about"]):
+        if hit_type in {"company_specialties", "company_overview"}:
+            score += 0.15
+
+    # ── Noise penalties ───────────────────────────────────────────────────────
     if any(marker in lowered for marker in NOISY_DOCUMENT_MARKERS):
         score -= 0.45
 
@@ -329,7 +387,7 @@ Answer based strictly on the context above:"""
 # Main ask function
 # ─────────────────────────────────────────────
 
-def ask(question: str, store: VectorStore = None, llm: BedrockLLM = None, verbose: bool = False) -> str:
+def ask(question: str, store: VectorStore = None, llm: BedrockLLM = None, verbose: bool = False, debug: bool = False) -> str:
     """
     Full RAG pipeline: retrieve context → generate answer.
 
@@ -338,12 +396,28 @@ def ask(question: str, store: VectorStore = None, llm: BedrockLLM = None, verbos
     question : The user's question.
     store    : VectorStore instance (created if not provided).
     llm      : BedrockLLM instance (created if not provided).
-    verbose  : If True, print retrieved context before the answer.
+    verbose  : If True, print full retrieved context before the answer.
+    debug    : If True, print a compact table of retrieved hits (type, entity, score).
     """
     store = store or VectorStore()
     llm   = llm   or BedrockLLM()
 
-    context = build_context(store, question)
+    hits = retrieve_hits(store, question)
+
+    if debug:
+        print("\n── Retrieved hits ──────────────────────────────────────────────────")
+        print(f"  {'#':<4} {'type':<28} {'entity':<30} {'dist':>6}  coll")
+        print("  " + "-" * 76)
+        for i, h in enumerate(hits, 1):
+            meta = h.get("metadata", {})
+            print(
+                f"  {i:<4} {meta.get('type', '?'):<28} "
+                f"{str(meta.get('entity_name', '?'))[:29]:<30} "
+                f"{h.get('distance', 1.0):>6.4f}  {h.get('collection', '?')}"
+            )
+        print("────────────────────────────────────────────────────────────────────\n")
+
+    context = build_context_from_hits(hits)
 
     if verbose:
         print("\n── Retrieved context ──────────────────────────")
@@ -367,7 +441,7 @@ Answer based strictly on the context above:"""
 # CLI
 # ─────────────────────────────────────────────
 
-def interactive_mode(store: VectorStore, llm: BedrockLLM):
+def interactive_mode(store: VectorStore, llm: BedrockLLM, debug: bool = False):
     print(f"\nLinkedIn Career Assistant — Interactive Mode")
     print("Type your question, or 'quit' to exit.\n")
     while True:
@@ -381,24 +455,25 @@ def interactive_mode(store: VectorStore, llm: BedrockLLM):
         if question.lower() in {"quit", "exit", "q"}:
             print("Goodbye.")
             break
-        answer = ask(question, store=store, llm=llm)
+        answer = ask(question, store=store, llm=llm, debug=debug)
         print(f"\nAssistant: {answer}\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LinkedIn Career Assistant — Query")
-    parser.add_argument("question",     nargs="?", help="Question to ask")
+    parser.add_argument("question",      nargs="?", help="Question to ask")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive REPL mode")
-    parser.add_argument("--verbose",    "-v", action="store_true", help="Show retrieved context")
+    parser.add_argument("--verbose",     "-v", action="store_true", help="Show full retrieved context")
+    parser.add_argument("--debug",       "-d", action="store_true", help="Show retrieved hit types and entities")
     args = parser.parse_args()
 
     store = VectorStore()
     llm   = BedrockLLM()
 
     if args.interactive:
-        interactive_mode(store, llm)
+        interactive_mode(store, llm, debug=args.debug)
     elif args.question:
-        answer = ask(args.question, store=store, llm=llm, verbose=args.verbose)
+        answer = ask(args.question, store=store, llm=llm, verbose=args.verbose, debug=args.debug)
         print(f"\n{answer}\n")
     else:
         parser.print_help()
