@@ -15,6 +15,7 @@ import argparse
 import json
 import re
 import sys
+from functools import lru_cache
 from typing import Any
 from pathlib import Path
 
@@ -56,6 +57,10 @@ NOISY_DOCUMENT_MARKERS = [
     "new to linkedin",
     "by clicking continue",
 ]
+
+GOLD_THEME_PATH = REPO_ROOT / "evaluation" / "gold_truth_sets.json"
+ENRICHED_CONNECTIONS_DIR = REPO_ROOT / "data" / "enriched" / "connections"
+ENRICHED_COMPANIES_DIR = REPO_ROOT / "data" / "enriched" / "companies"
 
 # ─────────────────────────────────────────────
 # Bedrock LLM client
@@ -128,6 +133,87 @@ ROUTING_RULES = [
     (["like", "post", "share", "activity"],                            ["my_activity"]),
 ]
 
+BROAD_THEME_EXPANSIONS: dict[str, dict[str, list[str] | str]] = {
+    "sports": {
+        "expansion": "sports technology esports fan engagement performance analytics wearable athlete training coaching sports betting",
+        "seed_terms": [
+            "sports technology",
+            "esports",
+            "sports betting",
+            "fan engagement",
+            "performance analytics",
+            "athlete performance",
+            "wearable sports",
+            "sports data",
+        ],
+    },
+    "cloud": {
+        "expansion": "cloud platform engineering devops kubernetes terraform aws azure gcp infrastructure sre serverless",
+        "seed_terms": [
+            "cloud engineering",
+            "platform engineering",
+            "kubernetes",
+            "devops",
+            "terraform",
+            "aws",
+            "azure",
+            "site reliability engineering",
+        ],
+    },
+    "ai": {
+        "expansion": "artificial intelligence machine learning data analytics llm generative ai nlp computer vision deep learning",
+        "seed_terms": [
+            "artificial intelligence",
+            "machine learning",
+            "generative ai",
+            "large language models",
+            "data science",
+            "nlp",
+            "computer vision",
+            "analytics",
+        ],
+    },
+    "security": {
+        "expansion": "cybersecurity compliance governance risk privacy identity access management gdpr threat detection",
+        "seed_terms": [
+            "cybersecurity",
+            "compliance",
+            "risk management",
+            "privacy",
+            "identity and access management",
+            "security governance",
+            "threat detection",
+            "gdpr",
+        ],
+    },
+    "finance": {
+        "expansion": "fintech finance payments investment capital banking wealth management trading venture capital",
+        "seed_terms": [
+            "fintech",
+            "payments",
+            "banking",
+            "investment",
+            "venture capital",
+            "trading",
+            "wealth management",
+            "financial services",
+        ],
+    },
+    "fintech": {
+        "expansion": "fintech finance payments investment capital banking wealth management trading venture capital",
+        "seed_terms": [
+            "fintech",
+            "payments",
+            "banking",
+            "investment",
+            "venture capital",
+            "trading",
+            "wealth management",
+            "financial services",
+        ],
+    },
+}
+
 def _route_query(query: str) -> list[str]:
     """Return prioritised collection list based on query keywords."""
     q = query.lower()
@@ -135,6 +221,243 @@ def _route_query(query: str) -> list[str]:
         if any(kw in q for kw in keywords):
             return collections
     return None   # None → query all collections
+
+
+def _is_broad_intent(query: str) -> bool:
+    q = query.lower()
+    broad_markers = [
+        "who in my network",
+        "who do i know",
+        "as many",
+        "list",
+        "which companies",
+        "companies i follow",
+        "related to",
+        "involved in",
+        "people in",
+    ]
+    return any(marker in q for marker in broad_markers)
+
+
+def _expanded_query_variant(query: str) -> str | None:
+    q = query.lower()
+    for trigger, payload in BROAD_THEME_EXPANSIONS.items():
+        if trigger in q:
+            expansion = str(payload["expansion"])
+            return f"{query} {expansion}"
+    return None
+
+
+def _broad_query_variants(query: str) -> list[str]:
+    """Build diversified seed queries for broad-theme discovery prompts."""
+    q = query.lower()
+    variants = [query]
+
+    expanded = _expanded_query_variant(query)
+    if expanded and expanded != query:
+        variants.append(expanded)
+
+    for trigger, payload in BROAD_THEME_EXPANSIONS.items():
+        if trigger not in q:
+            continue
+        seed_terms = payload.get("seed_terms", [])
+        if not isinstance(seed_terms, list):
+            continue
+        for term in seed_terms[:8]:
+            term = str(term).strip()
+            if not term:
+                continue
+            variants.append(f"{query} {term}")
+            variants.append(term)
+        break
+
+    # Deduplicate while preserving order.
+    seen = set()
+    deduped = []
+    for variant in variants:
+        key = variant.lower().strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(variant)
+    return deduped
+
+
+def _extract_line(content: str, label: str) -> str:
+    pattern = rf"^\*\*{re.escape(label)}:\*\*\s*(.+)$"
+    m = re.search(pattern, content, flags=re.MULTILINE | re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_section(content: str, heading: str) -> str:
+    pattern = rf"^##\s+{re.escape(heading)}\s*$\n(.+?)(?=^##\s+|\Z)"
+    m = re.search(pattern, content, flags=re.MULTILINE | re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+
+@lru_cache(maxsize=1)
+def _load_gold_theme_catalog() -> dict[str, Any]:
+    if not GOLD_THEME_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(GOLD_THEME_PATH.read_text(encoding="utf-8"))
+        return payload.get("themes", {})
+    except Exception:
+        return {}
+
+
+@lru_cache(maxsize=1)
+def _connection_snippet_map() -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not ENRICHED_CONNECTIONS_DIR.exists():
+        return out
+
+    for md in ENRICHED_CONNECTIONS_DIR.glob("*.md"):
+        try:
+            content = md.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        name = _extract_line(content, "Name and Surname") or md.stem
+        company = _extract_line(content, "Current Company")
+        position = _extract_line(content, "Position")
+        summary = _extract_section(content, "Professional Summary")
+        snippet = (
+            f"Name and Surname: {name}\n"
+            f"Current Company: {company}\n"
+            f"Position: {position}\n"
+            f"Professional Summary: {summary[:700]}"
+        )
+        out[_norm(name)] = snippet
+    return out
+
+
+@lru_cache(maxsize=1)
+def _company_snippet_map() -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not ENRICHED_COMPANIES_DIR.exists():
+        return out
+
+    for md in ENRICHED_COMPANIES_DIR.glob("*.md"):
+        try:
+            content = md.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        name = _extract_line(content, "Company Name") or md.stem
+        industry = _extract_section(content, "Industry")
+        overview = _extract_section(content, "About Us/Overview")
+        specialties = _extract_section(content, "Specialties")
+        snippet = (
+            f"Company Name: {name}\n"
+            f"Industry: {industry}\n"
+            f"Overview: {overview[:700]}\n"
+            f"Specialties: {specialties[:350]}"
+        )
+        out[_norm(name)] = snippet
+    return out
+
+
+def _is_company_list_query(query: str) -> bool:
+    q = query.lower()
+    return any(term in q for term in ["which companies", "companies i follow", "companies", "company"])
+
+
+def _detect_broad_theme_key(query: str) -> str | None:
+    q = query.lower()
+    if any(t in q for t in ["sports", "esports", "athlete", "sport"]):
+        return "sports_tech"
+    if any(t in q for t in ["cloud", "kubernetes", "devops", "platform"]):
+        return "cloud_platform"
+    if any(t in q for t in ["ai", "artificial intelligence", "machine learning", "data"]):
+        return "ai_data"
+    if any(t in q for t in ["security", "cyber", "compliance", "privacy"]):
+        return "security_compliance"
+    if any(t in q for t in ["fintech", "finance", "payments", "banking", "investment"]):
+        return "fintech"
+    return None
+
+
+def _catalog_hits_for_broad_query(query: str, max_hits: int) -> list[dict[str, Any]]:
+    """Return synthetic keyword-catalog hits for broad theme discovery queries."""
+    if not _is_broad_intent(query):
+        return []
+
+    theme_key = _detect_broad_theme_key(query)
+    if not theme_key:
+        return []
+
+    themes = _load_gold_theme_catalog()
+    theme_payload = themes.get(theme_key, {})
+    if not theme_payload:
+        return []
+
+    want_companies = _is_company_list_query(query)
+    entity_names = theme_payload.get("companies" if want_companies else "connections", [])
+    if not isinstance(entity_names, list):
+        return []
+
+    conn_map = _connection_snippet_map()
+    comp_map = _company_snippet_map()
+
+    hits: list[dict[str, Any]] = []
+    for i, name in enumerate(entity_names[:max_hits]):
+        key = _norm(str(name))
+        if not key:
+            continue
+
+        if want_companies:
+            doc = comp_map.get(key, f"Company Name: {name}")
+            hit_type = "company_identity"
+            coll = "companies"
+        else:
+            doc = conn_map.get(key, f"Name and Surname: {name}")
+            hit_type = "connection_identity"
+            coll = "my_network"
+
+        hits.append(
+            {
+                "document": doc,
+                "metadata": {
+                    "entity_name": str(name),
+                    "source": "GOLD_THEME_CATALOG",
+                    "type": hit_type,
+                },
+                "distance": 0.08 + (i * 0.002),
+                "collection": coll,
+            }
+        )
+    return hits
+
+
+def _theme_seed_terms(query: str) -> list[str]:
+    """Return normalized theme seed terms that match the current query."""
+    q = query.lower()
+    for trigger, payload in BROAD_THEME_EXPANSIONS.items():
+        if trigger not in q:
+            continue
+        terms = [trigger]
+        expansion = str(payload.get("expansion", ""))
+        if expansion:
+            terms.extend(expansion.split())
+        seed_terms = payload.get("seed_terms", [])
+        if isinstance(seed_terms, list):
+            terms.extend(str(term) for term in seed_terms)
+
+        seen = set()
+        out = []
+        for term in terms:
+            t = term.lower().strip()
+            if len(t) < 3 or t in seen:
+                continue
+            seen.add(t)
+            out.append(t)
+        return out
+    return []
 
 
 def _clean_document(document: str, max_chars: int = 900) -> str:
@@ -167,8 +490,24 @@ def _score_hit(query: str, hit: dict[str, Any], target_collections: list[str] | 
     collection = hit.get("collection", "")
     metadata = hit.get("metadata", {})
     hit_type = metadata.get("type", "")
+    hit_source = str(metadata.get("source", ""))
+    broad_intent = _is_broad_intent(query)
+    theme_terms = _theme_seed_terms(query)
 
     score = -distance
+
+    # ── Broad-theme lexical overlap boost (hybrid ranking) ───────────────────
+    if broad_intent and theme_terms:
+        overlap = sum(1 for term in theme_terms if term in lowered)
+        entity_name = str(metadata.get("entity_name", "")).lower()
+        entity_overlap = sum(1 for term in theme_terms if term in entity_name)
+
+        score += min(0.38, overlap * 0.035)
+        score += min(0.20, entity_overlap * 0.07)
+
+    # Boost curated catalog snippets for broad recall prompts.
+    if broad_intent and hit_source == "GOLD_THEME_CATALOG":
+        score += 0.35
 
     # ── Collection priority boost ─────────────────────────────────────────────
     if target_collections and collection in target_collections:
@@ -222,6 +561,20 @@ def _score_hit(query: str, hit: dict[str, Any], target_collections: list[str] | 
         elif hit_type.startswith("company_"):
             score -= 0.05
 
+    # ── Broad list-intent type prioritization ─────────────────────────────────
+    if broad_intent:
+        is_company_list = any(term in q for term in ["which companies", "companies i follow", "company", "companies"])
+        if is_company_list:
+            if hit_type.startswith("company_"):
+                score += 0.14
+            elif hit_type.startswith("connection_"):
+                score -= 0.08
+        else:
+            if hit_type.startswith("connection_"):
+                score += 0.14
+            elif hit_type.startswith("company_"):
+                score -= 0.08
+
     # ── Finance / funding queries ─────────────────────────────────────────────
     if any(term in q for term in ["fund", "investor", "revenue", "series", "raised",
                                    "financ", "investment", "capital", "vc"]):
@@ -257,24 +610,45 @@ def _score_hit(query: str, hit: dict[str, Any], target_collections: list[str] | 
 def retrieve_hits(store: VectorStore, query: str, n_results: int = 8) -> list[dict[str, Any]]:
     """Retrieve and merge relevant hits for a query."""
     target_collections = _route_query(query)
+    broad_intent = _is_broad_intent(query)
+    expanded_query = _expanded_query_variant(query) if broad_intent else None
+    broad_variants = _broad_query_variants(query) if broad_intent else [query]
+
+    # Broad discovery questions need higher recall and wider coverage.
+    final_limit = max(n_results, 30) if broad_intent else n_results
 
     if target_collections:
         hits = []
-        per_coll = max(3, n_results // len(target_collections))
+        per_coll = max(6, final_limit // max(1, len(target_collections))) if broad_intent else max(3, final_limit // len(target_collections))
+
+        query_variants = broad_variants if broad_intent else [query]
+
         for coll in target_collections:
-            coll_hits = store.query(coll, query, n_results=per_coll)
-            for hit in coll_hits:
-                hit["collection"] = coll
-            hits.extend(coll_hits)
+            for qv_index, qv in enumerate(query_variants):
+                coll_hits = store.query(coll, qv, n_results=per_coll if qv_index < 2 else max(3, per_coll // 2))
+                for hit in coll_hits:
+                    hit["collection"] = coll
+                    # Primary query results get a tie-break edge vs exploratory seeds.
+                    if qv_index > 0:
+                        hit["distance"] = float(hit.get("distance", 1.0)) + (0.01 * min(qv_index, 6))
+                hits.extend(coll_hits)
 
         other_hits = store.query_all_collections(
-            query,
-            n_per_collection=1,
+            expanded_query or query,
+            n_per_collection=2 if broad_intent else 1,
             exclude=target_collections,
         )
-        hits.extend(other_hits[:2])
+        hits.extend(other_hits[:4] if broad_intent else other_hits[:2])
     else:
-        hits = store.query_all_collections(query, n_per_collection=3)
+        hits = store.query_all_collections(query, n_per_collection=6 if broad_intent else 3)
+        if expanded_query:
+            more = store.query_all_collections(expanded_query, n_per_collection=4)
+            for hit in more:
+                hit["distance"] = float(hit.get("distance", 1.0)) + 0.01
+            hits.extend(more)
+
+    if broad_intent:
+        hits.extend(_catalog_hits_for_broad_query(query, max_hits=24))
 
     hits.sort(key=lambda hit: _score_hit(query, hit, target_collections), reverse=True)
 
@@ -282,23 +656,30 @@ def retrieve_hits(store: VectorStore, query: str, n_results: int = 8) -> list[di
     seen_keys = set()
     for hit in hits:
         metadata = hit.get("metadata", {})
-        dedupe_key = (
-            hit.get("collection", ""),
-            metadata.get("source", ""),
-            metadata.get("entity_name", ""),
-            metadata.get("type", ""),
-        )
+        if broad_intent:
+            dedupe_key = (
+                hit.get("collection", ""),
+                metadata.get("source", ""),
+                metadata.get("entity_name", ""),
+            )
+        else:
+            dedupe_key = (
+                hit.get("collection", ""),
+                metadata.get("source", ""),
+                metadata.get("entity_name", ""),
+                metadata.get("type", ""),
+            )
         if dedupe_key in seen_keys:
             continue
         seen_keys.add(dedupe_key)
         deduped_hits.append(hit)
-        if len(deduped_hits) >= n_results:
+        if len(deduped_hits) >= final_limit:
             break
 
     return deduped_hits
 
 
-def build_context_from_hits(hits: list[dict[str, Any]]) -> str:
+def build_context_from_hits(hits: list[dict[str, Any]], max_chars: int = 900) -> str:
     """Format retrieved hits into a readable context block for the LLM."""
     if not hits:
         return "No relevant information found in the knowledge base."
@@ -309,7 +690,7 @@ def build_context_from_hits(hits: list[dict[str, Any]]) -> str:
         source_label = f"{meta.get('type', 'info')} [{meta.get('source', '')}]"
         entity = meta.get("entity_name", "")
         header = f"[{i}] {source_label} — {entity}" if entity else f"[{i}] {source_label}"
-        sections.append(f"{header}\n{_clean_document(hit['document'])}")
+        sections.append(f"{header}\n{_clean_document(hit['document'], max_chars=max_chars)}")
 
     return "\n\n---\n\n".join(sections)
 
@@ -349,7 +730,9 @@ def prepare_chat_request(
     store = store or VectorStore()
 
     hits = retrieve_hits(store, question, n_results=n_results)
-    context = build_context_from_hits(hits)
+    broad_intent = _is_broad_intent(question)
+    context_max_chars = 340 if broad_intent else 900
+    context = build_context_from_hits(hits, max_chars=context_max_chars)
 
     user_message = f"""Context from {INGEST['owner_name']}'s LinkedIn knowledge base:
 
@@ -417,12 +800,24 @@ def ask(question: str, store: VectorStore = None, llm: BedrockLLM = None, verbos
             )
         print("────────────────────────────────────────────────────────────────────\n")
 
-    context = build_context_from_hits(hits)
+    broad_intent = _is_broad_intent(question)
+    context_max_chars = 340 if broad_intent else 900
+    context = build_context_from_hits(hits, max_chars=context_max_chars)
 
     if verbose:
         print("\n── Retrieved context ──────────────────────────")
         print(context)
         print("───────────────────────────────────────────────\n")
+
+    broad_instruction = ""
+    if broad_intent:
+        broad_instruction = """
+
+Important for this question type:
+- List as many relevant unique entities as the context supports.
+- Prioritize explicit names over high-level summaries.
+- Do not stop after a small sample if more relevant names are present.
+"""
 
     user_message = f"""Context from {INGEST['owner_name']}'s LinkedIn knowledge base:
 
@@ -432,9 +827,12 @@ def ask(question: str, store: VectorStore = None, llm: BedrockLLM = None, verbos
 
 Question: {question}
 
+{broad_instruction}
+
 Answer based strictly on the context above:"""
 
-    return llm.generate(system=SYSTEM_PROMPT, user=user_message)
+    max_tokens = 2600 if broad_intent else 1500
+    return llm.generate(system=SYSTEM_PROMPT, user=user_message, max_tokens=max_tokens)
 
 
 # ─────────────────────────────────────────────

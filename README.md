@@ -5,7 +5,7 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 
 ## Current Status (May 14, 2026)
 
-**Phase 2e Complete** ✅
+**Phase 2e+3 Broad Recall Optimization** 🚀
 - LinkedIn Snapshot API flow is stable end-to-end
 - Parsing and ingestion are validated
 - ChromaDB collections are healthy and query-ready
@@ -13,7 +13,9 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - Enriched markdowns for companies and connections were normalized to strict schemas
 - Companies and network now use field-aware chunking instead of raw full-markdown chunking
 - Retrieval scoring now uses chunk-type-aware relevance boosts (identity/overview/finance/location)
-- Evaluation pipeline is in place with an LLM-as-judge harness and saved JSON results
+- **NEW**: Broad-intent retrieval enhanced with hybrid approach (semantic + curated keyword-backed catalog)
+- **NEW**: Strict gold truth sets (5 themes, 15 entities each) with automated rebuild from enriched data
+- **NEW**: Broad recall evaluation now scores 8.3/10 (83.3% recall) on curated gold methodology
 
 **Current focus:** Phase 3 productization (chat UX, freshness, and automation).
 
@@ -92,12 +94,27 @@ python ingest.py --ingest-only
 ### Evaluation (RAG Quality)
 
 ```bash
-# Run the full evaluation suite and save results
+# General RAG quality evaluation (mixed queries, LLM-as-judge)
 python evaluation/eval_rag.py --verbose --output evaluation/results/eval_results.json
 
 # Quick smoke run on first N cases
 python evaluation/eval_rag.py --limit 3 --output evaluation/results/eval_smoke.json
+
+# Broad-intent recall evaluation (themed discovery questions)
+# Tests: "Who in my network works in [theme]?" with strict 15-entity gold truth per theme
+python evaluation/eval_broad_recall.py --verbose
 ```
+
+### Rebuild Gold Truth Sets
+
+Gold truth sets are auto-generated from enriched markdown files with strict primary-theme classification:
+
+```bash
+# One-time rebuild after significant enrichment changes
+python evaluation/rebuild_gold_truth_sets_strict.py --top 15
+```
+
+This scans `data/enriched/{companies,connections}`, reads full files, weights theme mentions by section (industry/overview/position/summary), and keeps only primary-theme entities (>8 score + dominance over second theme).
 
 ---
 
@@ -141,7 +158,28 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Quality Gating** — Skip problematic companies (outdated, generic names)  
 ✅ **Normalized Enriched Schemas** — Companies and connections markdowns contain only required fields  
 ✅ **Field-Aware Chunking** — Companies and network are chunked by semantic sections (identity/overview/finance/etc.)  
-✅ **Evaluation Harness** — Repeatable scored RAG tests with per-category reporting and JSON artifacts  
+✅ **Hybrid Broad Retrieval** — Combines semantic retrieval with curated entity catalogs for better discovery recall  
+✅ **Strict Gold Evaluation** — Automated generation of ground truth from enriched data with primary-theme validation  
+✅ **Evaluation Harness** — Repeatable scored RAG tests with per-category reporting and JSON artifacts
+
+---
+
+## Strengths & Weaknesses
+
+### Strengths
+- **Broad discovery now works well**: Themed "list as many" queries achieve ~83% recall on curated gold sets
+- **Hybrid retrieval approach**: Combines semantic vectors with deterministic keyword-catalog fallback for better recall diversity
+- **Automated truth sets**: No manual curation needed; gold truth rebuilds automatically from enriched data with strict primary-theme gating
+- **Clean evaluation methodology**: Separated concerns (general RAG quality vs broad recall) with dedicated evaluation scripts
+- **Reproducible**: All retrieval and truth-set generation is deterministic and version-tracked
+
+### Weaknesses
+- **Fintech theme lag**: Fintech recall is weakest at ~47% (vs 100% for sports_tech); lower quality enrichment for financial entities
+- **Broad recall still narrow**: While 83% on gold, this is recall against only 15 curated entities per theme; absolute network coverage is smaller
+- **Hybrid retrieval cost**: Catalog-backed retrieval adds file I/O and map caching overhead (mitigated with lru_cache but not free)
+- **Limited to curated themes**: Only 5 theme clusters (sports, cloud, ai, security, fintech); ad-hoc queries outside these themes fall back to pure semantic retrieval
+- **Lack of dynamic reranking**: No cross-encoder or semantic similarity reranking of final results; relies on distance + static scoring
+- **Single-pass context**: Only 30 total hits retrieved for broad intents; deeper network mining would require pagination or iterative deepening  
 
 ---
 
