@@ -4,6 +4,8 @@
 
 Phase 2 uses the **LinkedIn Portability API** exclusively for data ingestion. All CSV-based Phase 1 logic has been replaced with API snapshots and Tavily enrichment.
 
+As of Phase 2d, enriched markdowns for companies and connections are normalized into strict field-only schemas before chunking and indexing.
+
 ---
 
 ## Ingestion Pipeline
@@ -15,9 +17,11 @@ Phase 2 uses the **LinkedIn Portability API** exclusively for data ingestion. Al
          ↓
 [2] ENRICH companies & connections only (skip if already enriched)
          ↓
-[3] CHUNK all 14 domains
+[3] NORMALIZE enriched markdowns for companies/connections
          ↓
-[4] UPSERT to ChromaDB (skip if content unchanged)
+[4] CHUNK all 14 domains
+         ↓
+[5] UPSERT to ChromaDB (skip if content unchanged)
 ```
 
 **Why this sequence?**
@@ -67,37 +71,48 @@ These domains use enriched markdown files ONLY (not snapshot base data).
 | CONNECTIONS | my_network | `data/enriched/connections/*.md` | Tavily Search (deep profile) |
 | COMPANY_FOLLOWS | companies | `data/enriched/companies/*.md` | Tavily Search (company research) |
 
+### Normalized Markdown Contract
+
+Before chunking, enriched markdowns are reduced to only required fields.
+
+Companies retain only:
+1. Company Name
+2. Source URL
+3. Extracted At
+4. About Us/Overview
+5. Locations
+6. Website URL
+7. Industry
+8. Company Size
+9. Founded
+10. Investors
+11. Funding
+12. Specialties
+
+Connections retain only:
+1. Name and Surname
+2. Current Company
+3. Position
+4. LinkedIn URL
+5. Connected On
+6. Professional Summary
+
+Original unstructured markdowns are preserved under `data/enriched_unstructured/`.
+
 **Why markdown-only?**
 - Snapshots contain minimal data (URL + basic info)
 - Tavily enrichment provides comprehensive profiles (news, funding, team, etc.)
 - Combining base + enriched = duplicate chunks → poor semantic search
 - Solution: Use enriched markdown exclusively, skip base snapshots
 
+**Why normalize first?**
+- Removes noisy page chrome and blended social activity
+- Makes chunking deterministic and field-aware
+- Prevents retrieval from being polluted by irrelevant sections
+
 **Code:** [ingest.py](ingest.py#L196-225), [ingest.py](ingest.py#L228-257)
 
-```python
-def parse_connections_snapshot(elements: List[Dict[str, Any]]) -> List[DocumentChunk]:
-    """Parse CONNECTIONS using enriched Tavily markdown ONLY."""
-    chunks = []
-    
-    # Snapshot base chunks SKIPPED (no chunks here)
-    
-    # Add enriched Tavily MDs only
-    enriched_dir = ENRICHED_DIR / "connections"
-    if enriched_dir.exists():
-        for md_file in enriched_dir.glob("*.md"):
-            with open(md_file, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            chunks.extend(chunk_text(
-                text=content,
-                domain="my_network",
-                ...
-                metadata={"source": "CONNECTIONS_TAVILY", ...}
-            ))
-    
-    return chunks
-```
+Chunking is now field-aware for these two domains rather than raw full-markdown chunking.
 
 ---
 
@@ -192,10 +207,20 @@ INGEST = {
 - Overlap: 0 (self-contained sections)
 - Example: "# POSITIONS" section chunks separately from "# SKILLS"
 
-**Tavily Enrichment Domains** (CONNECTIONS_TAVILY, COMPANY_FOLLOWS_TAVILY)
-- Max tokens: 500
-- Overlap: 50 (preserve context across sections)
-- Example: "## Funding & Investors" preserves funding context
+**Normalized Company Markdown** (`COMPANY_FOLLOWS_TAVILY`)
+- `company_identity`: Company Name, Source URL, Extracted At, Website, Industry, Company Size, Founded
+- `company_overview`: About Us/Overview
+- `company_locations`: All locations
+- `company_finance`: Investors + Funding
+- `company_specialties`: Specialties
+- Typical chunk size: 220-320 tokens
+- Overlap: 0 for structured sections, 30 for overview
+
+**Normalized Connection Markdown** (`CONNECTIONS_TAVILY`)
+- `connection_identity`: Name, company, position, LinkedIn URL, connected date
+- `connection_summary`: Professional Summary
+- Typical chunk size: 220-320 tokens
+- Overlap: 0 for identity, 30 for summary
 
 **Message Domains** (INBOX)
 - Max tokens: 300
@@ -216,8 +241,8 @@ INGEST = {
 |-----------|---------|---------|------|
 | `my_profile` | PROFILE, POSITIONS, EDUCATION, SKILLS, CERTS, LANGS, PUBS | Snapshots | ~7 chunks |
 | `my_activity` | JOB_APPLICANT_SAVED_ANSWERS | Snapshot | ~1 chunk |
-| `my_network` | CONNECTIONS | Enriched MD only (CONNECTIONS_TAVILY) | ~1,869 chunks |
-| `companies` | COMPANY_FOLLOWS | Enriched MD only (COMPANY_FOLLOWS_TAVILY) | ~5,888 chunks |
+| `my_network` | CONNECTIONS | Normalized enriched MD only (CONNECTIONS_TAVILY) | varies by chunking pass |
+| `companies` | COMPANY_FOLLOWS | Normalized enriched MD only (COMPANY_FOLLOWS_TAVILY) | varies by chunking pass |
 | `communications` | INBOX | Snapshot | ~1 chunk |
 | `jobs` | JOB_APPLICATIONS, SAVED_JOBS, SAVED_JOB_ALERTS | Snapshots | ~212 chunks |
 
@@ -228,6 +253,11 @@ INGEST = {
 ### Full Pipeline (Fetch + Enrich + Ingest)
 ```bash
 python ingest.py --fetch-all
+```
+
+### Normalize Enriched Markdown (One-Time / On Demand)
+```bash
+python scripts/rebuild_enriched_markdowns.py --yes
 ```
 
 ### Fetch Only
@@ -333,8 +363,11 @@ python ingest.py --enrich-only
 # Delete cached snapshots
 rm -rf data/api_snapshots
 
-# Delete enriched files (⚠️ caution!)
+# Delete normalized enriched files (⚠️ caution!)
 rm -rf data/enriched
+
+# Delete backup of original unstructured enriched files if desired (⚠️ caution!)
+rm -rf data/enriched_unstructured
 
 # Delete ChromaDB
 rm -rf chroma_db
@@ -351,7 +384,7 @@ Phase 1 CSV files are preserved in `data/Basic_LinkedInDataExport_04-18-2026/` f
 
 **Phase 1 scripts** (in `/Phase 1/parsers/` and `/Phase 1/tavily_scripts/`) are legacy and isolated; not imported by Phase 2.
 
-**Phase 1 enrichment files** (in `/Phase 1/tavily_scripts/{Companies,Connections}/`) were migrated to `data/enriched/` during initial Phase 2 setup. The enrichment scripts will reuse legacy files if needed (via `sync_legacy_*()` functions) but only for files that don't already exist in the new location.
+**Phase 1 enrichment files** (in `/Phase 1/tavily_scripts/{Companies,Connections}/`) were migrated during initial Phase 2 setup. The current active normalized dataset is stored in `data/enriched/`, while original unstructured markdowns are preserved in `data/enriched_unstructured/`.
 
 ---
 

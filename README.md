@@ -3,13 +3,17 @@
 Personal RAG-powered career intelligence built on your LinkedIn data.
 Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and LLM.
 
-## Current Status (May 13, 2026)
+## Current Status (May 14, 2026)
 
-**Phase 2c Complete** ✅
+**Phase 2e Complete** ✅
 - LinkedIn Snapshot API flow is stable end-to-end
-- Parsing and ingestion are validated (10,276 chunks indexed)
+- Parsing and ingestion are validated
 - ChromaDB collections are healthy and query-ready
 - Modular sync runner is in place for repeatable updates
+- Enriched markdowns for companies and connections were normalized to strict schemas
+- Companies and network now use field-aware chunking instead of raw full-markdown chunking
+- Retrieval scoring now uses chunk-type-aware relevance boosts (identity/overview/finance/location)
+- Evaluation pipeline is in place with an LLM-as-judge harness and saved JSON results
 
 **Current focus:** Phase 3 productization (chat UX, freshness, and automation).
 
@@ -19,9 +23,9 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 
 - **Vector DB**: ChromaDB (local, no server)
 - **Embeddings**: AWS Bedrock — Amazon Titan Embed v2
-- **LLM**: AWS Bedrock — Claude 3.5 Haiku
+- **LLM**: AWS Bedrock — Claude 4.5 Haiku
 - **Data Sources**: LinkedIn Portability API + Tavily Search enrichment
-- **Cost Control**: Content-hash deduplication + date-based incremental enrichment
+- **Cost Control**: Content-hash deduplication + incremental enrichment + deterministic markdown normalization
 
 ---
 
@@ -38,6 +42,8 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - **Phase 2a**: Snapshot API ingestion and local caching
 - **Phase 2b**: Enrichment pipeline for companies/connections
 - **Phase 2c**: Parsing + embedding + ChromaDB ingestion hardening
+- **Phase 2d**: Enriched markdown normalization + field-aware chunking for companies and network
+- **Phase 2e**: Retrieval tuning + evaluation harness (`evaluation/eval_rag.py`) with scored regression runs
 
 ### Phase 3 - Productization (Now)
 
@@ -65,6 +71,15 @@ aws configure  # AWS Bedrock access
 python ingest.py
 ```
 
+### Rebuild Normalized Enriched Markdown (Companies + Connections)
+
+```bash
+# One-time migration:
+# - data/enriched -> data/enriched_unstructured (backup)
+# - rebuilds data/enriched with strict field-only markdowns
+python scripts/rebuild_enriched_markdowns.py --yes
+```
+
 ### Incremental Updates
 
 Subsequent runs automatically skip already-enriched companies and connections:
@@ -72,6 +87,16 @@ Subsequent runs automatically skip already-enriched companies and connections:
 ```bash
 # Uses enrichment_config.json to only process new follows/connections
 python ingest.py --ingest-only
+```
+
+### Evaluation (RAG Quality)
+
+```bash
+# Run the full evaluation suite and save results
+python evaluation/eval_rag.py --verbose --output evaluation/results/eval_results.json
+
+# Quick smoke run on first N cases
+python evaluation/eval_rag.py --limit 3 --output evaluation/results/eval_smoke.json
 ```
 
 ---
@@ -114,6 +139,35 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Privacy** — All data stays on your machine; no cloud storage  
 ✅ **Self-Updating** — Config tracks last enrichment date for next run  
 ✅ **Quality Gating** — Skip problematic companies (outdated, generic names)  
+✅ **Normalized Enriched Schemas** — Companies and connections markdowns contain only required fields  
+✅ **Field-Aware Chunking** — Companies and network are chunked by semantic sections (identity/overview/finance/etc.)  
+✅ **Evaluation Harness** — Repeatable scored RAG tests with per-category reporting and JSON artifacts  
+
+---
+
+## Normalized Enriched Markdown Contract
+
+`data/enriched/companies/*.md` now contains only:
+1. Company Name
+2. Source URL
+3. Extracted At
+4. About Us/Overview
+5. Locations
+6. Website URL
+7. Industry
+8. Company Size
+9. Founded
+10. Investors
+11. Funding
+12. Specialties
+
+`data/enriched/connections/*.md` now contains only:
+1. Name and Surname
+2. Current Company
+3. Position
+4. LinkedIn URL
+5. Connected On
+6. Professional Summary
 
 ---
 
@@ -127,6 +181,11 @@ Historical documentation, audit reports, and execution guides are archived in **
 │   ├── enrich_connections_api.py # Connection enrichment via Tavily
 │   ├── skip_list.py              # Companies to skip (quality issues)
 │   └── enrichment_config.json    # Tracks enrichment progress
+├── scripts/
+│   └── rebuild_enriched_markdowns.py  # Normalize company/connection markdowns
+├── evaluation/
+│   ├── eval_rag.py               # LLM-as-judge evaluation runner
+│   └── results/                  # Saved evaluation outputs (.json)
 ├── db/
 │   └── vector_store.py           # ChromaDB interface + Bedrock
 ├── utils/
@@ -134,7 +193,8 @@ Historical documentation, audit reports, and execution guides are archived in **
 │   └── schema.py                 # DocumentChunk definition
 ├── data/
 │   ├── api_snapshots/            # Cached LinkedIn snapshots
-│   └── enriched/                 # Tavily enrichment markdown
+│   ├── enriched/                 # Normalized field-only markdowns
+│   └── enriched_unstructured/    # Backup of original unstructured markdowns
 ├── chroma_db/                    # ChromaDB vector store (local)
 └── docs/                         # Historical documentation
 ```
