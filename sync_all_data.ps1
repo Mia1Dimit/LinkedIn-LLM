@@ -191,27 +191,9 @@ try {
         throw "Cannot continue without Tavily diagnostics"
     }
 
-    $companiesStats = Invoke-Step -Name "Companies enrichment stats" -Command "python" -Arguments @("enrichment/enrich_companies_api.py", "--stats")
-    $connectionsStats = Invoke-Step -Name "Connections enrichment stats" -Command "python" -Arguments @("enrichment/enrich_connections_api.py", "--stats")
-
-    $pendingCompanies = Get-PendingCount -StatsOutput $companiesStats.OutputText
-    $pendingConnections = Get-PendingCount -StatsOutput $connectionsStats.OutputText
-
-    if ($pendingCompanies -ge 0) {
-        Write-Log "Pending companies parsed from stats: $pendingCompanies"
-    }
-    else {
-        Write-Log "Could not parse pending companies from stats output" "WARN"
-    }
-
-    if ($pendingConnections -ge 0) {
-        Write-Log "Pending connections parsed from stats: $pendingConnections"
-    }
-    else {
-        Write-Log "Could not parse pending connections from stats output" "WARN"
-    }
-
     if ($StatsOnly) {
+        $companiesStats = Invoke-Step -Name "Companies enrichment stats" -Command "python" -Arguments @("enrichment/enrich_companies_api.py", "--stats")
+        $connectionsStats = Invoke-Step -Name "Connections enrichment stats" -Command "python" -Arguments @("enrichment/enrich_connections_api.py", "--stats")
         Invoke-Step -Name "ChromaDB stats" -Command "python" -Arguments @("ingest.py", "--stats") | Out-Null
     }
     else {
@@ -219,19 +201,13 @@ try {
         $didEnrich = $false
         $ingestStatus = $null
 
-        $pendingTotal = 0
-        if ($pendingCompanies -gt 0) { $pendingTotal += $pendingCompanies }
-        if ($pendingConnections -gt 0) { $pendingTotal += $pendingConnections }
-
-        if ($pendingTotal -eq 0) {
-            Write-Log "Checking whether local parsed chunks already need ingest before considering fetch"
-            $ingestStatus = Get-IngestStatus
-            if ($ingestStatus -and $ingestStatus.collections) {
-                foreach ($prop in $ingestStatus.collections.PSObject.Properties) {
-                    $name = $prop.Name
-                    $row = $prop.Value
-                    Write-Log "Ingest status [$name]: parsed=$($row.parsed), current=$($row.current), missing=$($row.missing), changed=$($row.changed), unchanged=$($row.unchanged)"
-                }
+        Write-Log "Checking whether local parsed chunks already need ingest before considering fetch"
+        $ingestStatus = Get-IngestStatus
+        if ($ingestStatus -and $ingestStatus.collections) {
+            foreach ($prop in $ingestStatus.collections.PSObject.Properties) {
+                $name = $prop.Name
+                $row = $prop.Value
+                Write-Log "Ingest status [$name]: parsed=$($row.parsed), current=$($row.current), missing=$($row.missing), changed=$($row.changed), unchanged=$($row.unchanged)"
             }
         }
 
@@ -252,6 +228,31 @@ try {
                 $didFetch = $true
             }
         }
+
+        # NOW check enrichment stats on fresh data (after potential fetch)
+        $companiesStats = Invoke-Step -Name "Companies enrichment stats" -Command "python" -Arguments @("enrichment/enrich_companies_api.py", "--stats")
+        $connectionsStats = Invoke-Step -Name "Connections enrichment stats" -Command "python" -Arguments @("enrichment/enrich_connections_api.py", "--stats")
+
+        $pendingCompanies = Get-PendingCount -StatsOutput $companiesStats.OutputText
+        $pendingConnections = Get-PendingCount -StatsOutput $connectionsStats.OutputText
+
+        if ($pendingCompanies -ge 0) {
+            Write-Log "Pending companies parsed from stats: $pendingCompanies"
+        }
+        else {
+            Write-Log "Could not parse pending companies from stats output" "WARN"
+        }
+
+        if ($pendingConnections -ge 0) {
+            Write-Log "Pending connections parsed from stats: $pendingConnections"
+        }
+        else {
+            Write-Log "Could not parse pending connections from stats output" "WARN"
+        }
+
+        $pendingTotal = 0
+        if ($pendingCompanies -gt 0) { $pendingTotal += $pendingCompanies }
+        if ($pendingConnections -gt 0) { $pendingTotal += $pendingConnections }
 
         if ($SkipEnrich) {
             Write-Log "Skipping enrich stage by request" "WARN"
