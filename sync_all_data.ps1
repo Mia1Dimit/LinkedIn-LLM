@@ -245,7 +245,9 @@ try {
             Write-Log "Skipping fetch: snapshots are fresh (< $SnapshotFreshHours hours)" "WARN"
         }
         else {
-            $fetchResult = Invoke-Step -Name "Fetch snapshots" -Command "python" -Arguments @("ingest.py", "--fetch-only")
+            # Snapshots are stale: force refresh by skipping cache
+            $skipCacheArg = if ((Test-SnapshotsFresh -Hours $SnapshotFreshHours)) { @() } else { @("--skip-cache") }
+            $fetchResult = Invoke-Step -Name "Fetch snapshots" -Command "python" -Arguments (@("ingest.py", "--fetch-only") + $skipCacheArg)
             if ($fetchResult.ExitCode -eq 0) {
                 $didFetch = $true
             }
