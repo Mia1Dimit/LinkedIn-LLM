@@ -270,11 +270,9 @@ try {
         if ($SkipRebuildMarkdowns) {
             Write-Log "Skipping rebuild enriched markdowns by request" "WARN"
         }
-        elseif ($didEnrich) {
-            Invoke-Step -Name "Rebuild enriched markdowns" -Command "python" -Arguments @("scripts/rebuild_enriched_markdowns.py", "--yes") | Out-Null
-        }
         else {
-            Write-Log "Skipping rebuild enriched markdowns: no enrichment changes" "WARN"
+            Write-Log "Skipping rebuild enriched markdowns: this is a one-time migration tool, not a regular sync operation" "WARN"
+            Write-Log "  To normalize enriched markdowns manually, run: python scripts/rebuild_enriched_markdowns.py --yes" "INFO"
         }
 
         if (-not $didFetch -and -not $didEnrich -and -not $ingestStatus) {
