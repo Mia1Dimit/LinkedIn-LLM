@@ -16,18 +16,33 @@ As of Phase 2d, enriched markdowns for companies and connections are normalized 
 [1] FETCH all snapshot domains from LinkedIn Portability API
          ↓
 [2] ENRICH companies & connections only (skip if already enriched)
+    └─ writes raw Tavily output → data/enriched_unstructured/{companies,connections}/
          ↓
-[3] NORMALIZE enriched markdowns for companies/connections
+[3] REBUILD (incremental) — normalise only new files
+    └─ reads new files from data/enriched_unstructured/
+    └─ writes normalised field-only markdowns → data/enriched/{companies,connections}/
+    └─ skips files that already exist in data/enriched/ (idempotent)
          ↓
-[4] CHUNK all 14 domains
+[4] CHUNK all 14 domains (reads data/enriched/ for companies & connections)
          ↓
 [5] UPSERT to ChromaDB (skip if content unchanged)
 ```
 
 **Why this sequence?**
+- Enrichment writes raw Tavily output to `enriched_unstructured/` so originals are always preserved
+- Rebuild normalises only *new* files (`--new-only`) instead of rewriting the whole corpus each run
+- Ingest always reads clean, normalised markdowns from `enriched/` — never raw content
 - Prevents redundant Tavily API calls (quota management)
-- Avoids re-embedding unchanged chunks (cost optimization)
+- Avoids re-embedding unchanged chunks (cost optimisation)
 - Eliminates base+enriched duplication for semantic search quality
+
+### Data Directories
+
+| Directory | Contents | Written by | Read by |
+|-----------|----------|------------|---------|
+| `data/api_snapshots/` | LinkedIn Portability API JSON snapshots | `ingestion/snapshot_api.py` | parsers in `ingest.py` |
+| `data/enriched_unstructured/` | Raw Tavily search output (markdown) | `enrichment/enrich_*.py` | `scripts/rebuild_enriched_markdowns.py` |
+| `data/enriched/` | Normalised field-only markdown | `scripts/rebuild_enriched_markdowns.py` | `ingest.py` chunkers |
 
 ---
 
@@ -97,7 +112,7 @@ Connections retain only:
 5. Connected On
 6. Professional Summary
 
-Original unstructured markdowns are preserved under `data/enriched_unstructured/`.
+Original unstructured (raw Tavily) markdowns are stored under `data/enriched_unstructured/` — this is the **primary enrichment output directory**. Normalised markdowns in `data/enriched/` are derived from them by the rebuild script.
 
 **Why markdown-only?**
 - Snapshots contain minimal data (URL + basic info)
@@ -123,25 +138,22 @@ Chunking is now field-aware for these two domains rather than raw full-markdown 
 **File:** [enrichment/enrich_companies_api.py](enrichment/enrich_companies_api.py)  
 **File:** [enrichment/enrich_connections_api.py](enrichment/enrich_connections_api.py)
 
-Both enrichment scripts check if a company/connection is already enriched before calling Tavily API:
+Both enrichment scripts check if a company/connection is already enriched before calling Tavily API.
+They write output to `data/enriched_unstructured/` (`ENRICHED_DIR` in `enrichment/common.py`):
 
 ```python
+ENRICHED_DIR = REPO_ROOT / "data" / "enriched_unstructured"  # raw Tavily output
+OUTPUT_DIR  = ENRICHED_DIR / "companies"  # or /connections
+
 def split_pending(companies: list[dict]) -> tuple[list[dict], int]:
     pending = []
     enriched = 0
     for company in companies:
-        if file_has_content(output_path(company)):  # ← Check if .md exists
+        if file_has_content(output_path(company)):  # ← Check in enriched_unstructured/
             enriched += 1
         else:
             pending.append(company)  # ← Only enrich new ones
     return pending, enriched
-
-# Usage in main()
-pending, enriched = split_pending(companies)
-print_stats(companies, pending, enriched, ...)
-
-if not pending:
-    return  # ← Early exit: no new enrichments needed
 ```
 
 **Impact:**
@@ -246,18 +258,72 @@ INGEST = {
 | `communications` | INBOX | Snapshot | ~1 chunk |
 | `jobs` | JOB_APPLICATIONS, SAVED_JOBS, SAVED_JOB_ALERTS | Snapshots | ~212 chunks |
 
+## Sync Orchestrator (sync_all_data.ps1)
+
+The PowerShell orchestrator is the **recommended entry point** for all data updates. It wraps the individual pipeline steps with smart skip logic, live streaming, and structured logging.
+
+### Pipeline Execution Order
+
+```
+1. Pre-checks         — Python version, Tavily API diagnostics
+2. Ingest status      — parse vs stored chunk diff (decides whether ingest is needed)
+3. Fetch              — snapshots from LinkedIn API (skipped if <24h old or unchanged)
+4. Enrichment stats   — checked AFTER fetch so counts reflect fresh snapshot data
+5. Enrich             — Tavily for pending companies/connections → enriched_unstructured/
+6. Rebuild new-only   — normalise only new files enriched_unstructured/ → enriched/
+7. Ingest             — parse enriched/ + all snapshots → ChromaDB (dedup by content hash)
+8. Rebuild gold truth — auto-regenerate evaluation ground truth from enriched/
+9. [Optional] Eval    — broad-recall smoke test (threshold 7.5/10, off by default)
+```
+
+### Key Parameters
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `-SkipFetch` | off | Force-skip snapshot fetch |
+| `-ForceFetch` | off | Fetch even if snapshots are fresh |
+| `-SkipEnrich` | off | Skip Tavily enrichment |
+| `-SkipIngest` | off | Skip ChromaDB ingestion |
+| `-ForceIngest` | off | Ingest even if no upstream changes |
+| `-SkipRebuildMarkdowns` | off | Skip incremental markdown rebuild |
+| `-SkipRebuildGoldTruth` | off | Skip gold truth rebuild |
+| `-RunBroadEval` | off | Enable broad-recall evaluation |
+| `-SnapshotFreshHours` | 24 | Age threshold before snapshots are considered stale |
+| `-EvalThreshold` | 7.5 | Minimum recall score to pass pipeline |
+| `-StatsOnly` | off | Only print enrichment + ChromaDB stats, no changes |
+| `-ContinueOnError` | off | Carry on after step failures (useful for debugging) |
+
+### Smart Skip Logic
+
+- **Fetch**: skipped when latest snapshot file age < `SnapshotFreshHours`; `--skip-cache` passed to `snapshot_api.py` when stale
+- **Enrich**: skipped when both `pendingCompanies == 0` and `pendingConnections == 0` (stats parsed after fetch)
+- **Rebuild**: skipped when enrich did not run (no new files to rebuild)
+- **Ingest**: skipped when no upstream step ran AND ingest-status diff shows zero missing/changed chunks
+- **Gold truth**: always runs unless `-SkipRebuildGoldTruth` is set
+
+### Logging
+
+Each run writes a timestamped log to `logs/sync/sync_YYYYMMDD_HHMMSS.log` containing every step's command, output, exit code, and duration. Live output is streamed to the console via `Tee-Object`.
+
 ---
 
 ## Running the Pipeline
 
-### Full Pipeline (Fetch + Enrich + Ingest)
+### Full Pipeline via Orchestrator (Recommended)
 ```bash
-python ingest.py --fetch-all
+.\sync_all_data.ps1              # fetch if stale, enrich, rebuild, ingest, rebuild gold
+.\sync_all_data.ps1 -SkipFetch  # skip fetch, run everything else
+.\sync_all_data.ps1 -StatsOnly  # print enrichment + ChromaDB stats only
 ```
 
-### Normalize Enriched Markdown (One-Time / On Demand)
+### Normalize Enriched Markdown
 ```bash
+# Full rebuild — (re)process all files from enriched_unstructured/ into enriched/
 python scripts/rebuild_enriched_markdowns.py --yes
+
+# Incremental — only new files in enriched_unstructured/ not yet in enriched/
+# (runs automatically inside sync_all_data.ps1 after each enrich step)
+python scripts/rebuild_enriched_markdowns.py --new-only
 ```
 
 ### Fetch Only
@@ -294,16 +360,27 @@ python ingest.py --fetch-all --verbose
 
 ## Incremental Updates
 
-When new LinkedIn data arrives:
+When new LinkedIn data arrives, use the orchestrator:
 
 ```bash
-# 1. Fetch latest snapshots (pulls new data from API)
+# Recommended: let sync_all_data.ps1 decide what to run
+.\sync_all_data.ps1
+```
+
+Or run steps manually:
+
+```bash
+# 1. Fetch latest snapshots (pulls new data from LinkedIn API)
 python ingest.py --fetch-only
 
-# 2. Enrich (skip logic prevents redundant Tavily calls)
+# 2. Enrich (writes raw Tavily output to data/enriched_unstructured/)
+#    Skip logic prevents redundant Tavily calls
 python ingest.py --enrich-only
 
-# 3. Ingest (skip_unchanged prevents redundant embeddings)
+# 3. Rebuild — normalise only the new files into data/enriched/
+python scripts/rebuild_enriched_markdowns.py --new-only
+
+# 4. Ingest (reads normalised enriched/ + snapshots, dedup prevents redundant embeddings)
 python ingest.py --ingest-only
 ```
 
@@ -334,15 +411,19 @@ export LINKEDIN_OWNER_NAME="Your Name"  # Used in system prompt
 ## Troubleshooting
 
 ### Q: Why are some enrichments not running?
-**A:** Check if the .md file already exists in `data/enriched/{companies,connections}/`. The enrichment script skips existing files.
+**A:** Check if the `.md` file already exists in `data/enriched_unstructured/{companies,connections}/`. The enrichment script checks there (ENRICHED_DIR now points to `enriched_unstructured/`).
 
 **Solution:**
 ```bash
-# Delete the file to re-enrich
-rm data/enriched/companies/Company_acme.md
+# Delete the raw file to re-enrich
+del data\enriched_unstructured\companies\Company_acme.md
+del data\enriched\companies\Company_acme.md  # remove normalised version too
 
 # Re-run enrichment
 python ingest.py --enrich-only
+
+# Then rebuild the normalised version
+python scripts/rebuild_enriched_markdowns.py --new-only
 ```
 
 ### Q: Why is ingest not embedding new chunks?
@@ -361,19 +442,19 @@ python ingest.py --enrich-only
 ### Q: How do I reset everything and start fresh?
 ```bash
 # Delete cached snapshots
-rm -rf data/api_snapshots
+Remove-Item -Recurse -Force data\api_snapshots
 
-# Delete normalized enriched files (⚠️ caution!)
-rm -rf data/enriched
+# Delete raw unstructured enriched files
+Remove-Item -Recurse -Force data\enriched_unstructured
 
-# Delete backup of original unstructured enriched files if desired (⚠️ caution!)
-rm -rf data/enriched_unstructured
+# Delete normalised enriched files
+Remove-Item -Recurse -Force data\enriched
 
 # Delete ChromaDB
-rm -rf chroma_db
+Remove-Item -Recurse -Force chroma_db
 
-# Re-run full pipeline
-python ingest.py --fetch-all
+# Re-run full pipeline via orchestrator
+.\sync_all_data.ps1 -ForceFetch
 ```
 
 ---
@@ -397,5 +478,5 @@ Phase 1 CSV files are preserved in `data/Basic_LinkedInDataExport_04-18-2026/` f
 
 ---
 
-**Last Updated:** May 12, 2026  
+**Last Updated:** May 15, 2026  
 **Status:** ✅ Production-Ready

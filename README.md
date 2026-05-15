@@ -14,7 +14,7 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - Field-aware chunking for companies and network (identity/overview/finance/location boosts)
 - **Retrieval**: Hybrid broad discovery (semantic + keyword-catalog) achieving 8.3/10 recall
 - **Evaluation**: Strict automated gold truth generation (5 themes, 15 entities each) with rebuild from enriched data
-- **Orchestration**: Sync pipeline now handles full workflow: fetch→enrich→rebuild-markdowns→ingest→rebuild-gold→[optional eval]
+- **Orchestration**: Sync pipeline now handles full workflow: fetch→enrich(→enriched_unstructured)→rebuild-new-only(→enriched)→ingest→rebuild-gold→[optional eval]
 
 **Phase 3 remaining:** Frontend chat UI, freshness layer (changelog polling), authentication, deployment.
 
@@ -51,9 +51,12 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 **Infrastructure & Retrieval (Complete)**
 - ✅ Hybrid broad-intent retrieval (semantic + curated keyword catalogs) — 8.3/10 recall on gold sets
 - ✅ Strict gold truth generation with automated rebuilds from enriched data
-- ✅ Sync orchestrator (sync_all_data.ps1): fetch→enrich→rebuild-markdowns→ingest→rebuild-gold→[optional eval]
+- ✅ Sync orchestrator (`sync_all_data.ps1`): fetch→enrich→rebuild-new-only→ingest→rebuild-gold→[optional eval]
+  - Enrichment writes raw Tavily output to `data/enriched_unstructured/`
+  - Incremental rebuild (`--new-only`) normalizes only newly enriched files into `data/enriched/`
+  - Ingest reads from `data/enriched/` (normalized, field-only schemas)
   - Smart skip logic for each stage (only runs when changes detected)
-  - Markdown normalization before ingestion (strict field-only schemas)
+  - All `ingest.py` steps stream output live (unbuffered `-u` flag)
   - Gold truth stays current after each ingest (automated rebuild)
   - Optional broad-recall smoke test with threshold failure mode (default: 7.5/10)
   - Full logging with step timings and exit codes
@@ -87,18 +90,39 @@ python ingest.py
 ### Rebuild Normalized Enriched Markdown (Companies + Connections)
 
 ```bash
-# One-time migration:
-# - data/enriched -> data/enriched_unstructured (backup)
-# - rebuilds data/enriched with strict field-only markdowns
+# Full (re)build — reads all files from data/enriched_unstructured/, normalises, writes to data/enriched/
+# Use this once after initial setup or a bulk import.
 python scripts/rebuild_enriched_markdowns.py --yes
+
+# Incremental rebuild — only normalises files newly added to enriched_unstructured/ that are not yet in enriched/
+# This runs automatically in sync_all_data.ps1 after each enrich step.
+python scripts/rebuild_enriched_markdowns.py --new-only
 ```
 
-### Incremental Updates
-
-Subsequent runs automatically skip already-enriched companies and connections:
+### Incremental Updates (via orchestrator — recommended)
 
 ```bash
-# Uses enrichment_config.json to only process new follows/connections
+# Handles the full flow automatically with smart skip logic:
+# fetch (if stale) → enrich new entities → rebuild new markdowns → ingest → rebuild gold truth
+.\sync_all_data.ps1
+
+# Skip fetch if snapshots are already fresh:
+.\sync_all_data.ps1 -SkipFetch
+```
+
+### Manual Incremental Steps
+
+```bash
+# 1. Fetch latest snapshots
+python ingest.py --fetch-only
+
+# 2. Enrich new companies/connections (writes raw Tavily output to data/enriched_unstructured/)
+python ingest.py --enrich-only
+
+# 3. Normalise only new enriched files into data/enriched/
+python scripts/rebuild_enriched_markdowns.py --new-only
+
+# 4. Parse + embed + ingest (reads from data/enriched/)
 python ingest.py --ingest-only
 ```
 
@@ -167,7 +191,7 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Privacy** — All data stays on your machine; no cloud storage  
 ✅ **Self-Updating** — Config tracks last enrichment date for next run  
 ✅ **Quality Gating** — Skip problematic companies (outdated, generic names)  
-✅ **Normalized Enriched Schemas** — Companies and connections markdowns contain only required fields  
+✅ **Two-Stage Enrichment Storage** — Raw Tavily output lands in `enriched_unstructured/`; normalised field-only markdowns live in `enriched/`  
 ✅ **Field-Aware Chunking** — Companies and network are chunked by semantic sections (identity/overview/finance/etc.)  
 ✅ **Hybrid Broad Retrieval** — Combines semantic retrieval with curated entity catalogs for better discovery recall  
 ✅ **Strict Gold Evaluation** — Automated generation of ground truth from enriched data with primary-theme validation  
