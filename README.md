@@ -3,21 +3,20 @@
 Personal RAG-powered career intelligence built on your LinkedIn data.
 Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and LLM.
 
-## Current Status (May 14, 2026)
+## Current Status (May 15, 2026)
 
-**Phase 2e+3 Broad Recall Optimization** 🚀
+**Phase 3 Productization: Orchestration Layer & Broad Retrieval** 🚀
 - LinkedIn Snapshot API flow is stable end-to-end
 - Parsing and ingestion are validated
 - ChromaDB collections are healthy and query-ready
-- Modular sync runner is in place for repeatable updates
-- Enriched markdowns for companies and connections were normalized to strict schemas
-- Companies and network now use field-aware chunking instead of raw full-markdown chunking
-- Retrieval scoring now uses chunk-type-aware relevance boosts (identity/overview/finance/location)
-- **NEW**: Broad-intent retrieval enhanced with hybrid approach (semantic + curated keyword-backed catalog)
-- **NEW**: Strict gold truth sets (5 themes, 15 entities each) with automated rebuild from enriched data
-- **NEW**: Broad recall evaluation now scores 8.3/10 (83.3% recall) on curated gold methodology
+- Modular sync runner with smart skip logic is in place for repeatable updates
+- Enriched markdowns for companies and connections normalized to strict field-only schemas
+- Field-aware chunking for companies and network (identity/overview/finance/location boosts)
+- **Retrieval**: Hybrid broad discovery (semantic + keyword-catalog) achieving 8.3/10 recall
+- **Evaluation**: Strict automated gold truth generation (5 themes, 15 entities each) with rebuild from enriched data
+- **Orchestration**: Sync pipeline now handles full workflow: fetch→enrich→rebuild-markdowns→ingest→rebuild-gold→[optional eval]
 
-**Current focus:** Phase 3 productization (chat UX, freshness, and automation).
+**Phase 3 remaining:** Frontend chat UI, freshness layer (changelog polling), authentication, deployment.
 
 ---
 
@@ -47,11 +46,23 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - **Phase 2d**: Enriched markdown normalization + field-aware chunking for companies and network
 - **Phase 2e**: Retrieval tuning + evaluation harness (`evaluation/eval_rag.py`) with scored regression runs
 
-### Phase 3 - Productization (Now)
+### Phase 3 - Productization (Current)
 
-- Frontend chat UI with conversation history and internet-enabled answering
+**Infrastructure & Retrieval (Complete)**
+- ✅ Hybrid broad-intent retrieval (semantic + curated keyword catalogs) — 8.3/10 recall on gold sets
+- ✅ Strict gold truth generation with automated rebuilds from enriched data
+- ✅ Sync orchestrator (sync_all_data.ps1): fetch→enrich→rebuild-markdowns→ingest→rebuild-gold→[optional eval]
+  - Smart skip logic for each stage (only runs when changes detected)
+  - Markdown normalization before ingestion (strict field-only schemas)
+  - Gold truth stays current after each ingest (automated rebuild)
+  - Optional broad-recall smoke test with threshold failure mode (default: 7.5/10)
+  - Full logging with step timings and exit codes
+
+**Frontend & UX (Planned)**
+- Frontend chat UI with conversation history and multi-turn queries
 - Freshness layer using changelog polling + targeted incremental ingest
-- CI/CD and scheduler automation so updates run without manual intervention
+- Authentication and session management
+- Deployment packaging (Docker, etc.)
 
 ---
 
@@ -160,7 +171,8 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Field-Aware Chunking** — Companies and network are chunked by semantic sections (identity/overview/finance/etc.)  
 ✅ **Hybrid Broad Retrieval** — Combines semantic retrieval with curated entity catalogs for better discovery recall  
 ✅ **Strict Gold Evaluation** — Automated generation of ground truth from enriched data with primary-theme validation  
-✅ **Evaluation Harness** — Repeatable scored RAG tests with per-category reporting and JSON artifacts
+✅ **Evaluation Harness** — Repeatable scored RAG tests with per-category reporting and JSON artifacts  
+✅ **Orchestrated Pipeline** — Modular sync runner (PowerShell) handles fetch→enrich→rebuild→ingest→eval with smart skip logic
 
 ---
 
