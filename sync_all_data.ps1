@@ -223,7 +223,7 @@ try {
         else {
             # Snapshots are stale: force refresh by skipping cache
             $skipCacheArg = if ((Test-SnapshotsFresh -Hours $SnapshotFreshHours)) { @() } else { @("--skip-cache") }
-            $fetchResult = Invoke-Step -Name "Fetch snapshots" -Command "python" -Arguments (@("ingest.py", "--fetch-only") + $skipCacheArg)
+            $fetchResult = Invoke-Step -Name "Fetch snapshots" -Command "python" -Arguments (@("ingest.py", "--fetch-only") + $skipCacheArg) -StreamOutput
             if ($fetchResult.ExitCode -eq 0) {
                 $didFetch = $true
             }
@@ -261,18 +261,26 @@ try {
             Write-Log "Skipping enrich: no pending companies/connections" "WARN"
         }
         else {
-            $enrichResult = Invoke-Step -Name "Enrich pending entities" -Command "python" -Arguments @("ingest.py", "--enrich-only")
+            $enrichResult = Invoke-Step -Name "Enrich pending entities" -Command "python" -Arguments @("ingest.py", "--enrich-only") -StreamOutput
             if ($enrichResult.ExitCode -eq 0) {
                 $didEnrich = $true
             }
         }
 
+        # Rebuild: normalise only files newly written by enrich into enriched_unstructured → enriched.
+        # This runs after enrich so that new raw Tavily files get converted to structured markdowns
+        # before ingest. Skipped if enrich did not run and SkipRebuildMarkdowns is set.
         if ($SkipRebuildMarkdowns) {
             Write-Log "Skipping rebuild enriched markdowns by request" "WARN"
         }
+        elseif (-not $didEnrich) {
+            Write-Log "Skipping rebuild enriched markdowns: enrich stage did not run, no new files to rebuild" "INFO"
+        }
         else {
-            Write-Log "Skipping rebuild enriched markdowns: this is a one-time migration tool, not a regular sync operation" "WARN"
-            Write-Log "  To normalize enriched markdowns manually, run: python scripts/rebuild_enriched_markdowns.py --yes" "INFO"
+            $rebuildResult = Invoke-Step -Name "Rebuild new enriched markdowns" -Command "python" -Arguments @("scripts/rebuild_enriched_markdowns.py", "--new-only")
+            if ($rebuildResult.ExitCode -ne 0 -and -not $ContinueOnError) {
+                throw "Rebuild enriched markdowns failed"
+            }
         }
 
         if (-not $didFetch -and -not $didEnrich -and -not $ingestStatus) {

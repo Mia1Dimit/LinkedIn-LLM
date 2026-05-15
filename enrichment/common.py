@@ -14,7 +14,8 @@ import requests
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = REPO_ROOT / "data" / "api_snapshots"
-ENRICHED_DIR = REPO_ROOT / "data" / "enriched"
+# Enrichment scripts write raw Tavily output here; rebuild then normalises to data/enriched/
+ENRICHED_DIR = REPO_ROOT / "data" / "enriched_unstructured"
 LEGACY_ENRICHMENT_DIR = REPO_ROOT / "Phase 1" / "tavily_scripts"
 LEGACY_CONNECTIONS_DIR = LEGACY_ENRICHMENT_DIR / "Connections"
 LEGACY_COMPANIES_DIR = LEGACY_ENRICHMENT_DIR / "Companies"

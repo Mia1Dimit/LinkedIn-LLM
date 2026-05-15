@@ -323,6 +323,7 @@ def normalize_connection_md(text: str) -> str:
 
 
 def migrate() -> tuple[int, int]:
+    """Full (re)build: read all files from BACKUP_DIR, normalise, write to ENRICHED_DIR."""
     source_root: Path
 
     if BACKUP_DIR.exists():
@@ -377,26 +378,84 @@ def migrate() -> tuple[int, int]:
     return company_count, connection_count
 
 
+def migrate_new_only() -> tuple[int, int]:
+    """Incremental build: only normalise files in BACKUP_DIR not yet present in ENRICHED_DIR.
+
+    Used in the regular sync pipeline after enrichment. Leaves existing files in ENRICHED_DIR
+    untouched and only adds newly-enriched (unstructured) files.
+    """
+    if not BACKUP_DIR.exists():
+        raise FileNotFoundError(
+            f"Unstructured source folder missing: {BACKUP_DIR}\n"
+            "Run the full migration first: python scripts/rebuild_enriched_markdowns.py --yes"
+        )
+
+    out_companies = ENRICHED_DIR / "companies"
+    out_connections = ENRICHED_DIR / "connections"
+    out_companies.mkdir(parents=True, exist_ok=True)
+    out_connections.mkdir(parents=True, exist_ok=True)
+
+    company_count = 0
+    connection_count = 0
+
+    src_companies = BACKUP_DIR / "companies"
+    if src_companies.exists():
+        for md_file in sorted(src_companies.glob("*.md")):
+            dest = out_companies / md_file.name
+            if not dest.exists():
+                content = md_file.read_text(encoding="utf-8", errors="ignore")
+                normalized = normalize_company_md(content)
+                dest.write_text(normalized, encoding="utf-8")
+                company_count += 1
+
+    src_connections = BACKUP_DIR / "connections"
+    if src_connections.exists():
+        for md_file in sorted(src_connections.glob("*.md")):
+            dest = out_connections / md_file.name
+            if not dest.exists():
+                content = md_file.read_text(encoding="utf-8", errors="ignore")
+                normalized = normalize_connection_md(content)
+                dest.write_text(normalized, encoding="utf-8")
+                connection_count += 1
+
+    return company_count, connection_count
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rebuild enriched markdowns to strict minimal schemas")
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Execute migration immediately (otherwise dry-run summary only)",
+        help="Execute FULL migration: (re)build all files from enriched_unstructured → enriched",
+    )
+    parser.add_argument(
+        "--new-only",
+        action="store_true",
+        help="Incremental mode: only rebuild files in enriched_unstructured not yet in enriched",
     )
     args = parser.parse_args()
 
+    if args.new_only:
+        companies, connections = migrate_new_only()
+        if companies == 0 and connections == 0:
+            print("No new files to rebuild.")
+        else:
+            print(f"Incremental rebuild completed.")
+            print(f"  new companies rebuilt: {companies}")
+            print(f"  new connections rebuilt: {connections}")
+        return 0
+
     if not args.yes:
-        print("Dry run only. Re-run with --yes to execute migration.")
-        print(f"Will rename: {ENRICHED_DIR} -> {BACKUP_DIR}")
-        print("Will create: data/enriched/companies and data/enriched/connections")
+        print("Dry run only. Re-run with --yes to execute full migration, or --new-only for incremental.")
+        print(f"Source (unstructured): {BACKUP_DIR}")
+        print(f"Destination (structured): {ENRICHED_DIR}")
         return 0
 
     companies, connections = migrate()
-    print("Migration completed.")
+    print("Full migration completed.")
     print(f"companies rewritten: {companies}")
     print(f"connections rewritten: {connections}")
-    print(f"backup folder: {BACKUP_DIR}")
+    print(f"source folder: {BACKUP_DIR}")
     return 0
 
 
