@@ -344,19 +344,23 @@ Default sequence:
 ```
 
 This runs, in order:
-1. `python ingest.py --fetch-only`
-2. `python enrichment/enrich_companies_api.py --stats`
-3. `python enrichment/enrich_connections_api.py --stats`
-4. `python ingest.py --enrich-only`
-5. `python ingest.py --ingest-only`
-6. `python ingest.py --stats`
+1. Pre-checks (Python version, Tavily API diagnostics)
+2. Ingest status check (parse vs stored chunk diff)
+3. `python ingest.py --fetch-only` — fetch snapshots from LinkedIn API
+4. `python enrichment/enrich_companies_api.py --stats` + connections stats (on fresh data)
+5. `python ingest.py --enrich-only` — Tavily enrichment → `data/enriched_unstructured/`
+6. `python scripts/rebuild_enriched_markdowns.py --new-only` — normalise new files → `data/enriched/`
+7. `python ingest.py --ingest-only` — parse + embed + ChromaDB upsert
+8. `python ingest.py --stats` — post-run collection stats
+9. `python evaluation/rebuild_gold_truth_sets_strict.py` — keep gold truth current
 
 Smart skip behavior is built in:
-1. Skip fetch when snapshots are fresh (default threshold: 24h)
-2. Skip enrich when pending companies and connections are both 0
-3. Skip ingest when both fetch and enrich were skipped (no upstream changes)
+1. Skip fetch when snapshots are fresh (default threshold: 24h); passes `--skip-cache` to force refresh when stale
+2. Skip enrich when pending companies and connections are both 0 (checked **after** fetch)
+3. Skip rebuild when enrich did not run (no new files to normalise)
+4. Skip ingest when fetch, enrich, and rebuild were all skipped and no chunk diff detected
 
-Logs are written to `logs/sync/sync_YYYYMMDD_HHMMSS.log`.
+Logs are written to `logs/sync/sync_YYYYMMDD_HHMMSS.log`. All `ingest.py` steps stream output live.
 
 Each run also logs Tavily diagnostics:
 1. key source (`env:TAVILY_API_KEY` or `data/creds/tavily_key.json`)
@@ -369,13 +373,14 @@ Useful switches:
 ./sync_all_data.ps1 -StatsOnly
 ./sync_all_data.ps1 -SkipFetch
 ./sync_all_data.ps1 -SkipEnrich
+./sync_all_data.ps1 -SkipRebuildMarkdowns
 ./sync_all_data.ps1 -SkipIngest
 ./sync_all_data.ps1 -ContinueOnError
 ./sync_all_data.ps1 -ForceFetch
 ./sync_all_data.ps1 -ForceIngest
+./sync_all_data.ps1 -RunBroadEval
 ./sync_all_data.ps1 -SnapshotFreshHours 12
+./sync_all_data.ps1 -EvalThreshold 8.0
 ./sync_all_data.ps1 -TavilyApiKey "tvly-..."
 ./sync_all_data.ps1 -TavilyProjectId "proj_..."
 ```
-
-`sync_all_data.py` is now a compatibility wrapper that forwards to this PowerShell runner.
