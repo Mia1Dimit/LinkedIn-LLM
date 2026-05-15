@@ -2,11 +2,15 @@ param(
     [switch]$SkipFetch,
     [switch]$SkipEnrich,
     [switch]$SkipIngest,
+    [switch]$SkipRebuildMarkdowns,
+    [switch]$SkipRebuildGoldTruth,
+    [switch]$RunBroadEval,
     [switch]$StatsOnly,
     [switch]$ContinueOnError,
     [switch]$ForceFetch,
     [switch]$ForceIngest,
     [int]$SnapshotFreshHours = 24,
+    [double]$EvalThreshold = 7.5,
     [string]$TavilyApiKey,
     [string]$TavilyProjectId,
     [string]$LogDir = "logs/sync"
@@ -171,6 +175,8 @@ Write-Log "PowerShell: $($PSVersionTable.PSVersion)"
 Write-Log "ContinueOnError: $ContinueOnError"
 Write-Log "StatsOnly: $StatsOnly"
 Write-Log "SkipFetch: $SkipFetch, SkipEnrich: $SkipEnrich, SkipIngest: $SkipIngest"
+Write-Log "SkipRebuildMarkdowns: $SkipRebuildMarkdowns, SkipRebuildGoldTruth: $SkipRebuildGoldTruth"
+Write-Log "RunBroadEval: $RunBroadEval, EvalThreshold: $EvalThreshold/10"
 Write-Log "ForceFetch: $ForceFetch, ForceIngest: $ForceIngest"
 Write-Log "SnapshotFreshHours: $SnapshotFreshHours"
 if ($TavilyProjectId) {
@@ -258,6 +264,16 @@ try {
             }
         }
 
+        if ($SkipRebuildMarkdowns) {
+            Write-Log "Skipping rebuild enriched markdowns by request" "WARN"
+        }
+        elseif ($didEnrich) {
+            Invoke-Step -Name "Rebuild enriched markdowns" -Command "python" -Arguments @("scripts/rebuild_enriched_markdowns.py", "--yes") | Out-Null
+        }
+        else {
+            Write-Log "Skipping rebuild enriched markdowns: no enrichment changes" "WARN"
+        }
+
         if (-not $didFetch -and -not $didEnrich -and -not $ingestStatus) {
             Write-Log "Checking whether parsed chunks differ from stored chunks before deciding ingest"
             $ingestStatus = Get-IngestStatus
@@ -281,6 +297,31 @@ try {
         }
 
         Invoke-Step -Name "Post-run ChromaDB stats" -Command "python" -Arguments @("ingest.py", "--stats") | Out-Null
+
+        if ($SkipRebuildGoldTruth) {
+            Write-Log "Skipping rebuild gold truth by request" "WARN"
+        }
+        else {
+            Invoke-Step -Name "Rebuild gold truth sets" -Command "python" -Arguments @("evaluation/rebuild_gold_truth_sets_strict.py") | Out-Null
+        }
+
+        if ($RunBroadEval) {
+            $evalResult = Invoke-Step -Name "Run broad recall evaluation" -Command "python" -Arguments @("evaluation/eval_broad_recall.py")
+            if ($evalResult.ExitCode -eq 0) {
+                $scorePattern = "Average.*?([0-9]+\.[0-9]+)"
+                if ($evalResult.OutputText -match $scorePattern) {
+                    $avgScore = [double]$matches[1]
+                    Write-Log "Broad recall evaluation score: $avgScore/10 (threshold: $EvalThreshold/10)" "INFO"
+                    if ($avgScore -lt $EvalThreshold) {
+                        Write-Log "FAILED: Broad recall score ($avgScore) below threshold ($EvalThreshold)" "ERR"
+                        throw "Evaluation threshold not met: $avgScore < $EvalThreshold"
+                    }
+                }
+            }
+        }
+        else {
+            Write-Log "Skipping broad recall evaluation; use -RunBroadEval to enable" "WARN"
+        }
     }
 }
 catch {
