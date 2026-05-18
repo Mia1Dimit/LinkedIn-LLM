@@ -3,9 +3,9 @@
 Personal RAG-powered career intelligence built on your LinkedIn data.
 Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and LLM.
 
-## Current Status (May 15, 2026)
+## Current Status (May 18, 2026)
 
-**Phase 3 Productization: Orchestration Layer & Broad Retrieval** 🚀
+**Phase 3 Productization: Chat UI Live** 🚀
 - LinkedIn Snapshot API flow is stable end-to-end
 - Parsing and ingestion are validated
 - ChromaDB collections are healthy and query-ready
@@ -15,8 +15,11 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
 - **Retrieval**: Hybrid broad discovery (semantic + keyword-catalog) achieving 8.3/10 recall
 - **Evaluation**: Strict automated gold truth generation (5 themes, 15 entities each) with rebuild from enriched data
 - **Orchestration**: Sync pipeline now handles full workflow: fetch→enrich(→enriched_unstructured)→rebuild-new-only(→enriched)→ingest→rebuild-gold→[optional eval]
+- **Chat UI**: Claude-style frontend with streaming, memory, web search, collapsible source sidebar, and markdown rendering
+- **Chat API**: FastAPI backend with session memory (SQLite), model selector, Tavily web search, subprocess-isolated Bedrock calls
+- **Retrieval routing fix**: Self-referential queries ("what do you know about me", "what certification should I pursue") now correctly route to `my_profile` collection instead of `my_network`
 
-**Phase 3 remaining:** Frontend chat UI, freshness layer (changelog polling), authentication, deployment.
+**Phase 3 remaining:** Freshness layer (changelog polling), authentication, deployment.
 
 ---
 
@@ -60,16 +63,42 @@ Runs fully locally on your personal machine. Uses AWS Bedrock for embeddings and
   - Gold truth stays current after each ingest (automated rebuild)
   - Optional broad-recall smoke test with threshold failure mode (default: 7.5/10)
   - Full logging with step timings and exit codes
+- ✅ Retrieval routing fix: memory-aware context no longer bleeds into collection selection; self-referential queries correctly target `my_profile`
 
-**Frontend & UX (Planned)**
-- Frontend chat UI with conversation history and multi-turn queries
-- Freshness layer using changelog polling + targeted incremental ingest
+**Frontend & Chat API (Complete)**
+- ✅ FastAPI chat server (`api/chat_server.py`) with SSE-style NDJSON streaming
+- ✅ Session memory persisted to SQLite (`data/chat_memory.db`) — survives page reloads
+- ✅ Model selector (Claude Haiku 4.5 default, Sonnet 4, 3.7 Sonnet, custom model ID)
+- ✅ Optional Tavily web search per turn (toggle in UI)
+- ✅ Claude-style React frontend (`frontend/`) — dark theme, indigo accent
+  - Streaming markdown rendering (react-markdown + remark-gfm)
+  - Collapsible right sidebar: Knowledge base sources + Web sources with item counts
+  - Independent sidebar scroll (window height driven by chat column)
+  - Memory clear button
+- ✅ Subprocess-isolated Bedrock calls (prevents Windows access-violation crashes in streaming path)
+
+**Remaining**
+- Freshness layer (changelog polling + targeted incremental ingest)
 - Authentication and session management
 - Deployment packaging (Docker, etc.)
 
 ---
 
 ## Quick Start
+
+### Chat UI (Frontend + API)
+
+```bash
+# Terminal 1 — start the chat API
+python -m uvicorn api.chat_server:app --host 127.0.0.1 --port 8000
+
+# Terminal 2 — start the frontend dev server
+cd frontend
+npm install        # first time only
+npm run dev        # opens at http://localhost:5173
+```
+
+The UI connects to the API at `http://127.0.0.1:8000`. Keep both processes running while using the chat.
 
 ### Setup
 
@@ -196,7 +225,9 @@ Historical documentation, audit reports, and execution guides are archived in **
 ✅ **Hybrid Broad Retrieval** — Combines semantic retrieval with curated entity catalogs for better discovery recall  
 ✅ **Strict Gold Evaluation** — Automated generation of ground truth from enriched data with primary-theme validation  
 ✅ **Evaluation Harness** — Repeatable scored RAG tests with per-category reporting and JSON artifacts  
-✅ **Orchestrated Pipeline** — Modular sync runner (PowerShell) handles fetch→enrich→rebuild→ingest→eval with smart skip logic
+✅ **Orchestrated Pipeline** — Modular sync runner (PowerShell) handles fetch→enrich→rebuild→ingest→eval with smart skip logic  
+✅ **Chat UI** — Claude-style dark-theme frontend with streaming markdown, session memory, model selector, and web search  
+✅ **Smart Routing** — Query router extracts current intent from memory-enriched prompts; self-referential and advisory queries target `my_profile`
 
 ---
 

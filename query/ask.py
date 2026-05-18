@@ -125,11 +125,11 @@ class BedrockLLM:
 ROUTING_RULES = [
     (["networking activity", "recent networking", "networking", "relationship activity"], ["communications", "my_activity", "my_network", "companies"]),
     (["recent messages", "recent conversations", "recent activity", "latest activity"], ["communications", "my_activity", "my_network"]),
-    (["who", "connection", "know", "network", "person", "people"],    ["my_network"]),
+    (["who do i know", "who is ", "who are ", "who works", "connection", "my network", "person at", "people i know"],    ["my_network"]),
     (["company", "compan", "follow", "startup", "firm"],               ["companies"]),
     (["job", "role", "appl", "position", "opportunit", "career"],      ["jobs", "my_profile"]),
     (["message", "conversation", "talk", "spoke", "dm"],               ["communications"]),
-    (["skill", "experience", "background", "education", "cert"],       ["my_profile"]),
+    (["skill", "experience", "background", "education", "cert", "about me", "my profile", "know about me", "suggest", "recommend"],       ["my_profile"]),
     (["like", "post", "share", "activity"],                            ["my_activity"]),
 ]
 
@@ -215,8 +215,18 @@ BROAD_THEME_EXPANSIONS: dict[str, dict[str, list[str] | str]] = {
 }
 
 def _route_query(query: str) -> list[str]:
-    """Return prioritised collection list based on query keywords."""
-    q = query.lower()
+    """Return prioritised collection list based on query keywords.
+
+    When the query is memory-enriched (contains a 'Current user question:' marker),
+    route only on the current question to avoid prior-turn keywords biasing
+    collection selection (e.g. a prior 'who do I know' question bleeding into
+    the routing of a 'what certification should I pursue' follow-up).
+    """
+    if "Current user question:" in query:
+        routing_text = query.split("Current user question:", 1)[1].strip()
+    else:
+        routing_text = query
+    q = routing_text.lower()
     for keywords, collections in ROUTING_RULES:
         if any(kw in q for kw in keywords):
             return collections

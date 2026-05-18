@@ -10,6 +10,8 @@ data/
 creds/
 *.json
 !docs/*.json
+!frontend/package.json
+!frontend/package-lock.json
 
 # Environment variables and secrets
 .env
@@ -146,3 +148,6 @@ Phase 1/tavily_scripts/Companies/
 Phase 1/tavily_scripts/*.csv
 Phase 1/tavily_scripts/*.md
 Phase 2/
+
+
+frontend/node_modules/
